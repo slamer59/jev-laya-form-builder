@@ -5,8 +5,22 @@ import { SECTION_TITLES, type Backend, type FieldLayout, type FieldSpec, type Pi
 import { clients, resolveBackend } from "./backends";
 import { WIDTHS, applyLayoutThreshold, ruleLayout, ruleSectionTitle, ruleStartsSection, titleCriteria, widthCriteria } from "../shared/layout";
 
-/** A cached pick plus the model that produced it, so a cache-only response can still name the model. */
-type CacheEntry = { pick: Pick; model?: string };
+/**
+ * The layout answers for one field, kept raw so the layout can be re-derived for
+ * wherever the field sits now: section breaks depend on the neighbours.
+ */
+type LayoutAnswers = {
+  /** The width answer. It describes the field itself, so reordering keeps it. */
+  width?: { choice: Width; confidence: number; probabilities: Record<string, number> };
+  /** The section-break answer, and the name of the field it was asked after. */
+  sectionYes?: number;
+  askedAfter?: string | null;
+  /** The heading answer, asked in the same context as the break. */
+  heading?: { choice: SectionTitle; confidence: number; probabilities: Record<string, number> };
+};
+
+/** A cached field: the component answers, plus the layout answers the layout is derived from. */
+type CacheEntry = { pick: Omit<Pick, "layout">; layoutAnswers: LayoutAnswers; model?: string };
 
 /** Picks are cached per (backend + form purpose + field), so editing one field only re-asks for that field. */
 const cache = new Map<string, CacheEntry>();
@@ -60,32 +74,46 @@ function trusted(prob: number, threshold: number) {
   return Math.max(prob, 1 - prob) >= threshold;
 }
 
-/** Read the three layout answers for one field, falling back to the rules on anything unusable. */
-function readLayout(
+/** Pull the layout answers out of a response: validated, reduced to plain values, ready to cache. */
+function readLayoutAnswers(
   answers: SystemOneResult<Record<string, Question>>["answers"],
   id: string,
-  f: FieldSpec,
-  fallback: FieldLayout,
-  threshold: number,
-  source: Backend,
-): FieldLayout {
+  askedAfter: string | null,
+): LayoutAnswers {
   const width = answers[`w_${id}`];
   const w = width?.type === "choice" && WIDTHS.includes(width.choice as Width) ? width : undefined;
+  const heading = answers[`t_${id}`];
+  const h = heading?.type === "choice" && SECTION_TITLES.includes(heading.choice as SectionTitle) ? heading : undefined;
   const break_ = answers[`n_${id}`];
-  const yes = break_?.type === "noul" ? break_.noul : undefined;
-  // The first field is never asked, and the rules already open a section on it.
-  const startsSection = yes != null && trusted(yes, threshold) ? yes >= 0.5 : fallback.startsSection;
-  const titled = answers[`t_${id}`];
-  const t = titled?.type === "choice" && SECTION_TITLES.includes(titled.choice as SectionTitle) && titled.confidence >= threshold
-    ? (titled.choice as SectionTitle)
-    : undefined;
   return {
-    width: (w?.choice as Width) ?? fallback.width,
+    ...(w && { width: { choice: w.choice as Width, confidence: w.confidence, probabilities: { ...w.probabilities } } }),
+    ...(break_?.type === "noul" && { sectionYes: break_.noul }),
+    ...(h && { heading: { choice: h.choice as SectionTitle, confidence: h.confidence, probabilities: { ...h.probabilities } } }),
+    askedAfter,
+  };
+}
+
+/**
+ * Derive one field's layout from its answers and where it sits *now*. The rules are
+ * the fallback whenever the model is unsure or its answer was given for other neighbours.
+ */
+function layoutFrom(answers: LayoutAnswers, fields: FieldSpec[], i: number, threshold: number, source: Backend): FieldLayout {
+  const f = fields[i];
+  const fallback = ruleLayout(fields, i);
+  // A break question is asked about the form as it was, so moving the field makes that answer stale.
+  const sameContext = answers.askedAfter === (i > 0 ? fields[i - 1].name : null);
+  const yes = sameContext ? answers.sectionYes : undefined;
+  const heading = sameContext ? answers.heading : undefined;
+  const { width: w } = answers;
+  // The first field always opens a section, whatever was answered about an earlier position.
+  const startsSection = i === 0 || (yes != null && trusted(yes, threshold) ? yes >= 0.5 : fallback.startsSection);
+  return {
+    width: w?.choice ?? fallback.width,
     ...(w && { widthProbabilities: { ...w.probabilities }, confidence: w.confidence }),
     startsSection,
     ...(yes != null && { sectionProbability: yes }),
-    ...(startsSection && { sectionTitle: t ?? ruleSectionTitle(f) }),
-    ...(startsSection && titled?.type === "choice" && { sectionTitleProbabilities: { ...titled.probabilities } }),
+    ...(startsSection && { sectionTitle: (heading && heading.confidence >= threshold ? heading.choice : undefined) ?? ruleSectionTitle(f) }),
+    ...(startsSection && heading && { sectionTitleProbabilities: { ...heading.probabilities } }),
     source: w ? source : fallback.source,
   };
 }
@@ -114,7 +142,7 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
     if (hit) {
       cachedHits++;
       if (hit.model) cachedModels.push(hit.model);
-      picks[f.id] = applyThreshold(hit.pick, req.fields, i, threshold);
+      picks[f.id] = applyThreshold(hit, req.fields, i, threshold, backend);
       continue;
     }
     pending.push(i);
@@ -181,7 +209,7 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
         const f = req.fields[i];
         const c = res.answers[`c_${f.id}`];
         const s = res.answers[`s_${f.id}`];
-        const raw: Pick =
+        const pick: Omit<Pick, "layout"> =
           c && c.type === "choice"
             ? {
                 component: c.choice,
@@ -190,10 +218,14 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
                 probabilities: { ...c.probabilities },
               }
             : { component: ruleFor(f), source: "only-option" };
-        if (s && s.type === "noul") raw.sensitive = s.noul;
-        raw.layout = readLayout(res.answers, f.id, f, ruleLayout(req.fields, i), threshold, backend);
-        cache.set(keyFor(backend, req.purpose, f), { pick: raw, model });
-        picks[f.id] = applyThreshold(raw, req.fields, i, threshold);
+        if (s && s.type === "noul") pick.sensitive = s.noul;
+        const entry: CacheEntry = {
+          pick,
+          layoutAnswers: readLayoutAnswers(res.answers, f.id, i > 0 ? req.fields[i - 1].name : null),
+          model,
+        };
+        cache.set(keyFor(backend, req.purpose, f), entry);
+        picks[f.id] = applyThreshold(entry, req.fields, i, threshold, backend);
       }
     } catch (e) {
       // Never break the form because the model call failed: fall back to rules and report it.
@@ -214,10 +246,16 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
   };
 }
 
-/** 3. Confidence gate: act on the model's pick when it is sure, otherwise use the rule-based default — same for the layout. */
-function applyThreshold(p: Pick, fields: FieldSpec[], i: number, threshold: number): Pick {
+/**
+ * 3. Confidence gate: act on the model's pick when it is sure, otherwise use the rule-based default.
+ * The layout is re-derived here too, so a cached field is always laid out for its current position.
+ */
+function applyThreshold(entry: CacheEntry, fields: FieldSpec[], i: number, threshold: number, backend: Backend): Pick {
   const f = fields[i];
-  const gated: Pick = { ...p, layout: applyLayoutThreshold(p.layout ?? ruleLayout(fields, i), f, threshold) };
-  if ((p.source !== "jev" && p.source !== "laya") || (p.confidence ?? 0) >= threshold) return gated;
-  return { ...gated, component: ruleFor(f), source: "low-confidence", modelChoice: p.component };
+  const gated: Pick = {
+    ...entry.pick,
+    layout: applyLayoutThreshold(layoutFrom(entry.layoutAnswers, fields, i, threshold, backend), f, threshold),
+  };
+  if ((gated.source !== "jev" && gated.source !== "laya") || (gated.confidence ?? 0) >= threshold) return gated;
+  return { ...gated, component: ruleFor(f), source: "low-confidence", modelChoice: gated.component };
 }

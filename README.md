@@ -28,7 +28,7 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 - **Local mode with Laya** — one script runs Laya on your machine with `uvx`; nothing to install, no API key, no network calls after the first model download.
 - **Evaluation** — `bun run eval` runs the three presets through every available backend and prints accuracy, average confidence, latency and per-field mismatches.
 - **Never breaks** — no API key, a failed call or a low-confidence answer all fall back to plain rules. Latency, model name and token usage are shown in the header.
-- **Cheap and stable** — picks are cached per field spec in this app’s API (Laya itself keeps no cache), so editing one field only re-asks about that field; requests are debounced.
+- **Cheap and stable** — picks are cached per field spec in this app’s API (Laya itself keeps no cache), so editing one field only re-asks about that field; requests are debounced. The cache holds the model’s answers, not the layout: a field’s width is reused as-is, while the section break and heading are re-derived for wherever the field now sits (the first field always opens a section, and an answer given about other neighbours is dropped in favour of the rules rather than reused), so reordering never re-asks and never shows a stale section.
 - **Cache indicator** — the header says how many picks were asked vs served from cache (“Laya · all cached”, “3 asked, 7 cached · 540 ms”) instead of a bare “0 ms”.
 - **Re-ask** — one click asks the model again for the whole form, bypassing the cache.
 
@@ -109,6 +109,7 @@ The first run downloads PyTorch and the checkpoint (a few GB). Until Laya is up,
 | `start`            | Production server: API plus the built app on :3001             |
 | `typecheck`        | TypeScript check                                               |
 | `test:import`      | Assert the JSON Schema ↔ `FieldSpec` mapping, the `{ schema, uiSchema }` round-trip for every preset, and the share codec |
+| `test:pick`        | Assert the pick cache re-derives the layout after a reorder (against a stub model) and that the rules backend lays a reordered preset out correctly |
 | `verify:codegen`   | Generate the Code tab for every preset into `src/__generated__/` and compile it with `tsc` |
 | `shadcn:sync`      | Read `shared/catalog.ts` and `shadcn add` any missing component (`--dry-run` to preview) |
 
@@ -143,7 +144,7 @@ const res = await client.systemOne({ state: { form_purpose, fields }, questions 
 
 The layout rules — criteria the model reads, rule fallbacks, the confidence gate and section grouping — live in `shared/layout.ts`, so the client and the server share exactly one definition.
 
-**3. Confidence gate.** Act on the pick when the model is sure, otherwise use `ruleFor(field)`. Laya reports the margin between the top two options in `confidence` and the probability of the chosen option in `answer_confidence`; Jev only has `confidence`. `server/pick.ts` reads `answer_confidence` when present, so `Pick.confidence` is always a probability.
+**3. Confidence gate.** Act on the pick when the model is sure, otherwise use `ruleFor(field)`. Laya reports the margin between the top two options in `confidence` and the probability of the chosen option in `answer_confidence`; Jev only has `confidence`. `server/pick.ts` reads `answer_confidence` when present, so `Pick.confidence` is always a probability. Each layout question is gated on its own confidence too, and the cache keeps the model’s answers rather than the layout: `Pick.layout` is derived per request from the field’s current position, so a reorder reuses the component and width answers and re-derives the section break instead of replaying the one computed for the old neighbours.
 
 **4. Backends are a runtime choice.** `server/backends.ts` owns the three clients: Jev (needs `TYPESAFE_API_KEY`), Laya (same SDK, `baseURL` from `LAYA_URL`, default `http://localhost:8000`, placeholder key) and rules. `POST /api/pick` takes an optional `backend`; `GET /api/status` reports which are reachable, and the header selector defaults to the best one. The pick cache key includes the backend, so switching never serves the other backend’s answers.
 
@@ -184,6 +185,7 @@ server/
   index.ts        Hono API: /api/status, /api/pick, static files in production
   backends.ts     Jev / Laya / rules: clients, health probe, best-available choice
   pick.ts         Candidate filtering, model call, caching, confidence gate
+  pick.test.ts    Reorder + cache layout checks (test:pick)
 shared/
   catalog.ts      Component catalogue + rule-based fallbacks
   layout.ts       Width/section criteria sent to the model, layout rules, grouping

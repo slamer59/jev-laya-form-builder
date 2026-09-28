@@ -11,6 +11,7 @@
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc -p .",
     "test:import": "tsx shared/import.test.ts",
+    "test:pick": "tsx server/pick.test.ts",
     "verify:codegen": "tsx scripts/verify-codegen.ts",
     "shadcn:sync": "tsx scripts/shadcn-sync.ts"
   },
