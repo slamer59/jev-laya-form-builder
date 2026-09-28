@@ -1,0 +1,46 @@
+{
+  "name": "jev-form-builder",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"tsx watch server/index.ts\" \"vite\"",
+    "laya": "LAYA_PRELOAD=1 LAYA_MODELS=english uvx --python 3.12 --from 'laya[serve]' laya-serve",
+    "laya:gpu": "LAYA_DEVICE=cuda LAYA_PRELOAD=1 uvx --python 3.12 --from 'laya[serve]' laya-serve",
+    "dev:laya": "concurrently -n laya,api,web,open -c magenta,blue,green,gray \"LAYA_PRELOAD=1 LAYA_MODELS=english uvx --python 3.12 --from 'laya[serve]' laya-serve\" \"TYPESAFE_BASE_URL=http://localhost:8000 TYPESAFE_API_KEY=local tsx watch server/index.ts\" \"vite\" \"until curl -sf localhost:8000/health >/dev/null; do sleep 1; done; xdg-open http://localhost:8000/docs\"",
+    "build": "tsc -p . && vite build",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@hookform/resolvers": "^5.9.1",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "date-fns": "^4.4.0",
+    "hono": "^4.13.10",
+    "input-otp": "^1.5.0",
+    "lucide-react": "^1.48.0",
+    "radix-ui": "^1.6.7",
+    "react": "^19.3.0",
+    "react-day-picker": "^10.0.1",
+    "react-dom": "^19.3.0",
+    "react-hook-form": "^7.89.0",
+    "tailwind-merge": "^3.7.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  },
+  "type": "module",
+  "private": true
+}
