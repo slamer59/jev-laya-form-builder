@@ -21,7 +21,7 @@ export function CodeTab({ purpose, fields, picks }: Props) {
   const install = React.useMemo(() => installCode(input), [input]);
   const schema = React.useMemo(() => schemaToCode(fields), [fields]);
   const formJson = React.useMemo(
-    () => JSON.stringify({ purpose, fields: fields.map(({ id: _id, ...f }) => ({ ...f, component: picks[_id]?.component })) }, null, 2),
+    () => JSON.stringify({ purpose, fields: fields.map(({ id: _id, ...f }) => ({ ...f, component: picks[_id]?.component, layout: picks[_id]?.layout })) }, null, 2),
     [purpose, fields, picks],
   );
   const fileName = `${purpose.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "generated-form"}-form.tsx`;

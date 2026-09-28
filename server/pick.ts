@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { choice, noul, type ChoiceResponse, type Question } from "@typesafe-ai/sdk";
+import { choice, noul, type ChoiceResponse, type Question, type SystemOneResult } from "@typesafe-ai/sdk";
 import { candidatesFor, looksSensitive, ruleFor } from "../shared/catalog";
-import type { Backend, FieldSpec, Pick, PickRequest, PickResponse } from "../shared/types";
+import { SECTION_TITLES, type Backend, type FieldLayout, type FieldSpec, type Pick, type PickRequest, type PickResponse, type SectionTitle, type Width } from "../shared/types";
 import { clients, resolveBackend } from "./backends";
+import { WIDTHS, applyLayoutThreshold, ruleLayout, ruleSectionTitle, ruleStartsSection, titleCriteria, widthCriteria } from "../shared/layout";
 
 /** Picks are cached per (backend + form purpose + field), so editing one field only re-asks for that field. */
 const cache = new Map<string, Pick>();
@@ -33,12 +34,51 @@ const describe = (f: FieldSpec) => ({
   ...(f.max != null && { max: f.max }),
 });
 
-function rulesPick(f: FieldSpec): Pick {
+/** Layout questions point at a field by name and label; the whole form is already in the request state. */
+const identify = (f: FieldSpec) => ({ name: f.name, label: f.label });
+
+function rulesPick(f: FieldSpec, layout: FieldLayout): Pick {
   const only = candidatesFor(f.kind).length === 1;
   return {
     component: ruleFor(f),
     source: only ? "only-option" : "rules",
+    layout,
     ...(f.kind === "string" && { sensitive: looksSensitive(f) ? 1 : 0 }),
+  };
+}
+
+/** A yes/no answer counts only when the model is at least `threshold` sure of the winning side. */
+function trusted(prob: number, threshold: number) {
+  return Math.max(prob, 1 - prob) >= threshold;
+}
+
+/** Read the three layout answers for one field, falling back to the rules on anything unusable. */
+function readLayout(
+  answers: SystemOneResult<Record<string, Question>>["answers"],
+  id: string,
+  f: FieldSpec,
+  fallback: FieldLayout,
+  threshold: number,
+  source: Backend,
+): FieldLayout {
+  const width = answers[`w_${id}`];
+  const w = width?.type === "choice" && WIDTHS.includes(width.choice as Width) ? width : undefined;
+  const break_ = answers[`n_${id}`];
+  const yes = break_?.type === "noul" ? break_.noul : undefined;
+  // The first field is never asked, and the rules already open a section on it.
+  const startsSection = yes != null && trusted(yes, threshold) ? yes >= 0.5 : fallback.startsSection;
+  const titled = answers[`t_${id}`];
+  const t = titled?.type === "choice" && SECTION_TITLES.includes(titled.choice as SectionTitle) && titled.confidence >= threshold
+    ? (titled.choice as SectionTitle)
+    : undefined;
+  return {
+    width: (w?.choice as Width) ?? fallback.width,
+    ...(w && { widthProbabilities: { ...w.probabilities }, confidence: w.confidence }),
+    startsSection,
+    ...(yes != null && { sectionProbability: yes }),
+    ...(startsSection && { sectionTitle: t ?? ruleSectionTitle(f) }),
+    ...(startsSection && titled?.type === "choice" && { sectionTitleProbabilities: { ...titled.probabilities } }),
+    source: w ? source : fallback.source,
   };
 }
 
@@ -50,28 +90,23 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
   const client = backend === "rules" ? null : clients[backend];
 
   if (!client) {
-    for (const f of req.fields) picks[f.id] = rulesPick(f);
+    for (const [i, f] of req.fields.entries()) picks[f.id] = rulesPick(f, ruleLayout(req.fields, i));
     return { mode: "rules", picks, latencyMs: Math.round(performance.now() - started) };
   }
 
   // 1. Code filters: only components that can hold this kind of value are candidates.
-  // 2. The model decides among the candidates, one isolated question per field, all in one request.
+  // 2. The model decides the component, the width and the section break, one isolated question per field, all in one request.
   const questions: Record<string, Question> = {};
-  const pending: FieldSpec[] = [];
-  for (const f of req.fields) {
+  const pending: number[] = [];
+  for (const [i, f] of req.fields.entries()) {
     const cached = cache.get(keyFor(backend, req.purpose, f));
     if (cached) {
-      picks[f.id] = applyThreshold(cached, f, threshold);
+      picks[f.id] = applyThreshold(cached, req.fields, i, threshold);
       continue;
     }
+    pending.push(i);
     const candidates = candidatesFor(f.kind);
-    const asksChoice = candidates.length > 1;
-    if (!asksChoice && f.kind !== "string") {
-      picks[f.id] = rulesPick(f);
-      continue;
-    }
-    pending.push(f);
-    if (asksChoice) {
+    if (candidates.length > 1) {
       questions[`c_${f.id}`] = choice(
         {
           task: "Choose the best input component for this form field, for the person filling in the form.",
@@ -85,6 +120,31 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
         statement: "This form field asks for a secret that should be masked while typing, such as a password or card number.",
         field: describe(f),
       });
+    }
+    // The layout questions already have the whole form as state, so they only point at the field by name and label.
+    questions[`w_${f.id}`] = choice(
+      {
+        task: "How wide should this form field be, on a six-column grid?",
+        field: identify(f),
+      },
+      widthCriteria(),
+    );
+    // The first field always opens a section, so only the others are asked.
+    if (i > 0) {
+      questions[`n_${f.id}`] = noul({
+        statement: "This form field starts a new logical section of the form, introduced by its own heading.",
+        field: identify(f),
+      });
+    }
+    // Titles must travel in the same request as the break question, so which fields get one is predicted from the rules.
+    if (ruleStartsSection(req.fields, i)) {
+      questions[`t_${f.id}`] = choice(
+        {
+          task: "Which heading fits the section this form field opens?",
+          field: identify(f),
+        },
+        titleCriteria(),
+      );
     }
   }
 
@@ -104,7 +164,8 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
       });
       model = res.model;
       usage = res.usage;
-      for (const f of pending) {
+      for (const i of pending) {
+        const f = req.fields[i];
         const c = res.answers[`c_${f.id}`];
         const s = res.answers[`s_${f.id}`];
         const raw: Pick =
@@ -117,21 +178,24 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
               }
             : { component: ruleFor(f), source: "only-option" };
         if (s && s.type === "noul") raw.sensitive = s.noul;
+        raw.layout = readLayout(res.answers, f.id, f, ruleLayout(req.fields, i), threshold, backend);
         cache.set(keyFor(backend, req.purpose, f), raw);
-        picks[f.id] = applyThreshold(raw, f, threshold);
+        picks[f.id] = applyThreshold(raw, req.fields, i, threshold);
       }
     } catch (e) {
       // Never break the form because the model call failed: fall back to rules and report it.
       error = e instanceof Error ? e.message : String(e);
-      for (const f of pending) picks[f.id] = rulesPick(f);
+      for (const i of pending) picks[req.fields[i].id] = rulesPick(req.fields[i], ruleLayout(req.fields, i));
     }
   }
 
   return { mode: backend, model, usage, error, picks, latencyMs: Math.round(performance.now() - started) };
 }
 
-/** 3. Confidence gate: act on the model's pick when it is sure, otherwise use the rule-based default. */
-function applyThreshold(p: Pick, f: FieldSpec, threshold: number): Pick {
-  if ((p.source !== "jev" && p.source !== "laya") || (p.confidence ?? 0) >= threshold) return p;
-  return { ...p, component: ruleFor(f), source: "low-confidence", modelChoice: p.component };
+/** 3. Confidence gate: act on the model's pick when it is sure, otherwise use the rule-based default — same for the layout. */
+function applyThreshold(p: Pick, fields: FieldSpec[], i: number, threshold: number): Pick {
+  const f = fields[i];
+  const gated: Pick = { ...p, layout: applyLayoutThreshold(p.layout ?? ruleLayout(fields, i), f, threshold) };
+  if ((p.source !== "jev" && p.source !== "laya") || (p.confidence ?? 0) >= threshold) return gated;
+  return { ...gated, component: ruleFor(f), source: "low-confidence", modelChoice: p.component };
 }

@@ -41,6 +41,33 @@ export const BACKENDS: { value: Backend; label: string }[] = [
   { value: "rules", label: "Rules only" },
 ];
 
+/** How many grid columns a field spans in the preview (6-column grid). */
+export type Width = "full" | "half" | "third";
+
+/** Generic section titles. The model picks one from this fixed list (it cannot write text). */
+export const SECTION_TITLES = ["Identity", "Contact", "Details", "Preferences", "Legal / consent", "Other"] as const;
+export type SectionTitle = (typeof SECTION_TITLES)[number];
+
+/** Where one field goes: its column width, and whether it opens a new section. */
+export type FieldLayout = {
+  width: Width;
+  /** The model's probability for every width, when a model was asked. */
+  widthProbabilities?: Record<string, number>;
+  /** What the model leaned towards when the width fell back to a rule. */
+  modelWidth?: Width;
+  /** True when the field opens a new logical section. The first field always does. */
+  startsSection: boolean;
+  /** The model's probability of "yes" for the section-break question (0–1). */
+  sectionProbability?: number;
+  /** Title of the section this field opens, when it opens one. */
+  sectionTitle?: SectionTitle;
+  /** The model's probability for every title, when it was asked about this section. */
+  sectionTitleProbabilities?: Record<string, number>;
+  /** The model's confidence in the width choice, when a model was asked. */
+  confidence?: number;
+  source: PickSource;
+};
+
 export type Pick = {
   component: string;
   source: PickSource;
@@ -55,6 +82,8 @@ export type Pick = {
   modelChoice?: string;
   /** Probability (0–1) that the field holds sensitive data, for text fields. */
   sensitive?: number;
+  /** Model-driven layout: column width and section break for this field. */
+  layout?: FieldLayout;
 };
 
 export type PickRequest = FormSpec & { threshold?: number; backend?: Backend };

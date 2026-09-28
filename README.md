@@ -11,14 +11,16 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 - **Form builder UI** — add, edit, reorder and remove fields; set label, key, value type, required, hint, email/URL format, options and min/max.
 - **Presets** — Job application, Product feedback and Account sign-up, to get going in one click.
 - **Live, validated preview** — a real `react-hook-form` + Zod form you can fill in and submit; submitted values are shown as JSON.
+- **Responsive layout** — the preview is a 6-column grid: full-width for long answers, half for short paired fields, a third for tiny ones, collapsing to one column on narrow screens. Section headings come from the layout picks and can be renamed in place (the rename stays client-side).
 - **Manual overrides** — change any field’s component from the preview; “↺ Let Jev decide” gives control back.
 
 ### Decide
 
 - **AI component picking** — for each field, the model chooses among the components that can hold its value type (e.g. *Slider* vs *Number input* for a rating), reading the whole form as context.
 - **Secret detection** — every text field also gets a yes/no question: “should this be masked while typing?” (passwords, card numbers…).
-- **Confidence gate** — a threshold slider decides when to trust the model; below it, the pick falls back to a rule-based default and the badge shows what the model leaned towards. The number is the probability of the chosen option on every backend, so the slider means the same thing with Jev and Laya.
-- **Decisions tab** — per field, the probability for every candidate component and where the pick came from (`Jev`, `Rule`, `Only option`, `Jev unsure`, `Your choice`).
+- **Model-driven layout** — in the same request, every field is also asked how wide it should be (`full` / `half` / `third`, with descriptive criteria) and whether it starts a new logical section; fields predicted to open one are asked to pick a heading from a fixed list (Identity, Contact, Details, Preferences, Legal / consent, Other), since the model writes no prose.
+- **Confidence gate** — a threshold slider decides when to trust the model; below it, the pick falls back to a rule-based default and the badge shows what the model leaned towards. The number is the probability of the chosen option on every backend, so the slider means the same thing with Jev and Laya. Each layout question is gated on its own confidence too: an unsure width keeps the model’s probabilities for display but lays the field out by the rules.
+- **Decisions tab** — per field, the probability for every candidate component, the probability of each width, the “starts a section?” probability and the heading probabilities — plus where each decision came from (`Jev`, `Rule`, `Only option`, `Jev unsure`, `Your choice`).
 
 ### Backends
 
@@ -109,7 +111,7 @@ The first run downloads PyTorch and the checkpoint (a few GB). Until Laya is up,
 { id: "number", accepts: ["number"], when: "An exact number the user types in, such as a quantity…" },
 ```
 
-**2. Code filters, the model chooses.** Hard rules stay in code: only components that accept the value type are candidates. Then one isolated question per field, all in a single request, with the whole form as state (`server/pick.ts`).
+**2. Code filters, the model chooses.** Hard rules stay in code: only components that accept the value type are candidates. Then one isolated question per decision, all in a single request, with the whole form as state (`server/pick.ts`).
 
 ```ts
 questions[`c_${f.id}`] = choice(
@@ -118,9 +120,18 @@ questions[`c_${f.id}`] = choice(
 );
 if (f.kind === "string")
   questions[`s_${f.id}`] = noul({ statement: "This form field asks for a secret that should be masked…", field: describe(f) });
+// Layout, in the same request: width for every field, section break for all but the first,
+// and a heading from a fixed list for the fields the rules predict will open a section.
+questions[`w_${f.id}`] = choice({ task: "How wide should this form field be…", field: identify(f) }, widthCriteria());
+if (i > 0)
+  questions[`n_${f.id}`] = noul({ statement: "This form field starts a new logical section…", field: identify(f) });
+if (ruleStartsSection(req.fields, i))
+  questions[`t_${f.id}`] = choice({ task: "Which heading fits the section…", field: identify(f) }, titleCriteria());
 
 const res = await client.systemOne({ state: { form_purpose, fields }, questions });
 ```
+
+The layout rules — criteria the model reads, rule fallbacks, the confidence gate and section grouping — live in `shared/layout.ts`, so the client and the server share exactly one definition.
 
 **3. Confidence gate.** Act on the pick when the model is sure, otherwise use `ruleFor(field)`. Laya reports the margin between the top two options in `confidence` and the probability of the chosen option in `answer_confidence`; Jev only has `confidence`. `server/pick.ts` reads `answer_confidence` when present, so `Pick.confidence` is always a probability.
 
@@ -153,6 +164,7 @@ server/
   pick.ts         Candidate filtering, model call, caching, confidence gate
 shared/
   catalog.ts      Component catalogue + rule-based fallbacks
+  layout.ts       Width/section criteria sent to the model, layout rules, grouping
   schema.ts       FieldSpec → Zod schema (runtime and source code)
   codegen.ts      Picks → <GeneratedForm /> source + shadcn/npm install commands
   types.ts        FieldSpec, Pick, Backend, request/response types
@@ -168,7 +180,7 @@ src/
   presets.ts      Example forms
   persist.ts      URL hash + localStorage autosave, copy link, export JSON
   catalog-render.tsx   Component id → shadcn renderer
-  components/     FieldEditor, FormPreview, PickBadge, BackendPicker, CodeTab, ImportDialog, shadcn ui/
+  components/     FieldEditor, FormPreview, PickBadge, BackendPicker, CodeTab, ImportDialog, LayoutDecisions, SectionHeading, shadcn ui/
 ```
 
 ## Notes on Laya
@@ -178,6 +190,7 @@ src/
 - The base Laya checkpoints are not fine-tuned for this task, so expect weaker and less confident picks than Jev; more fields will land on the rule default.
 - Laya’s `confidence` behaves like a margin between options (near 0 when two options are close), while `answer_confidence` is the probability of the chosen option. The gate reads `answer_confidence` when present, so both backends gate on a probability.
 - On CPU a full preset is a single request of roughly 15 seconds (10 fields, CPU-only, English checkpoint), so the Laya client overrides the SDK’s 10-second default timeout with 120 seconds. Jev keeps the default.
+- The layout questions add up to three more per field (width, section break, heading), so a full preset sends roughly twice the questions and takes correspondingly longer on CPU; small forms answer in a few seconds, large ones may still fall back to the rules. The preview stays correct either way.
 - Yes/no (`noul`) answers are less reliable on the English checkpoint; check the “masked” flags.
 - `bun run eval` prints the whole picture per backend: component accuracy, accuracy under the default gate, masked-flag accuracy, average confidence and latency.
 
@@ -197,7 +210,6 @@ The rules score is flattering: they were written with these same presets in mind
 
 In progress on separate branches:
 
-- **Model-driven layout** — the model also decides each field’s width (full, half, third) and where sections start; the preview becomes a responsive grid with section headings.
 - **More components and value types** — toggle group, stepper, star rating, input with prefix/suffix; new types for time, date range, number range and file upload.
 
 ## Stack

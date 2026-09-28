@@ -10,6 +10,7 @@ import { loadInitialState, usePersistedForm } from "@/persist";
 import { FieldEditor } from "@/components/FieldEditor";
 import { FormPreview } from "@/components/FormPreview";
 import { ImportDialog } from "@/components/ImportDialog";
+import { LayoutDecisions } from "@/components/LayoutDecisions";
 import { PickBadge } from "@/components/PickBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ export default function App() {
   const [threshold, setThreshold] = React.useState(restored?.threshold ?? 0.5);
   const [showDecisions, setShowDecisions] = React.useState(true);
   const [overrides, setOverrides] = React.useState<Record<string, string>>(restored?.overrides ?? {});
+  const [sectionTitles, setSectionTitles] = React.useState<Record<string, string>>({});
   const [res, setRes] = React.useState<PickResponse | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [serverMode, setServerMode] = React.useState<Backend | "offline" | null>(null);
@@ -117,6 +119,7 @@ export default function App() {
     setPurpose(PRESETS[name].purpose);
     setFields(PRESETS[name].fields);
     setOverrides({});
+    setSectionTitles({});
     setOpenId(null);
   };
   // Imported fields replace the whole form; a builder export also restores its gate and overrides.
@@ -135,7 +138,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-muted/30">
       <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-3 px-4 py-3">
           <SparklesIcon className="size-5" />
           <h1 className="font-semibold">Jev Form Builder</h1>
           <span className="hidden text-sm text-muted-foreground sm:inline">shadcn · Zod · React Hook Form · Jev</span>
@@ -165,9 +168,9 @@ export default function App() {
         )}
       </header>
 
-      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[400px_1fr]">
+      <main className="mx-auto grid max-w-[1600px] grid-cols-1 gap-6 px-4 py-6 lg:grid-cols-[380px_minmax(0,1fr)] 2xl:grid-cols-[420px_minmax(0,1fr)]">
         {/* Left: the builder */}
-        <section className="space-y-4">
+        <section className="min-w-0 space-y-4">
           <Card className="gap-4 py-4">
             <CardHeader className="px-4">
               <CardTitle className="text-base">Form</CardTitle>
@@ -233,7 +236,7 @@ export default function App() {
         </section>
 
         {/* Right: preview, decisions, code */}
-        <section>
+        <section className="min-w-0">
           <Tabs defaultValue="preview">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <TabsList>
@@ -259,6 +262,15 @@ export default function App() {
                       fields={fields}
                       picks={picks}
                       showDecisions={showDecisions}
+                      sectionTitles={sectionTitles}
+                      onRenameSection={(id, title) =>
+                        setSectionTitles((s) => {
+                          const next = { ...s };
+                          if (title) next[id] = title;
+                          else delete next[id];
+                          return next;
+                        })
+                      }
                       onOverride={(id, c) =>
                         setOverrides((o) => {
                           const next = { ...o };
@@ -278,10 +290,11 @@ export default function App() {
             <TabsContent value="decisions">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">How each component was chosen</CardTitle>
+                  <CardTitle className="text-base">How each field was chosen</CardTitle>
                   <CardDescription>
-                    Code keeps only the components that can hold the value type. The model picks among the rest, one isolated question per field, all in one
-                    request. {modelCount > 0 && `${modelCount} of ${fields.length} picks came from the model.`}
+                    Code keeps only the components that can hold the value type. The model picks among the rest — and, for every field, its width on the
+                    six-column grid and whether it starts a new section. One isolated question per decision, all in one request.{" "}
+                    {modelCount > 0 && `${modelCount} of ${fields.length} picks came from the model.`}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -313,6 +326,7 @@ export default function App() {
                             );
                           })}
                         </div>
+                        <LayoutDecisions field={f} pick={p} />
                       </div>
                     );
                   })}

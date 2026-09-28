@@ -1,5 +1,6 @@
 import { codeList, zodCodeForField } from "./schema";
-import type { FieldSpec, Kind, Pick } from "./types";
+import { groupSections, widthFor } from "./layout";
+import type { FieldSpec, Kind, Pick, Width } from "./types";
 
 /**
  * Generates the "Component" and "Install" tabs of the Code view: a self-contained
@@ -36,6 +37,9 @@ export const SHADCN_ITEMS: Record<string, string[]> = {
 
 /** Every generated form imports these, whatever the picks are. */
 const ALWAYS = ["form", "label", "button"];
+
+/** Column span of each width on the 6-column grid, matching the preview (src/components/FormPreview.tsx). */
+const SPAN: Record<Width, string> = { full: "lg:col-span-6", half: "lg:col-span-3", third: "lg:col-span-2" };
 
 /** Rule default per value type, used when a pick names a component we have no template for. */
 const KIND_DEFAULT: Record<Kind, string> = {
@@ -359,18 +363,34 @@ export function generatedFormCode(input: CodegenInput): string {
   const { purpose, fields, picks } = input;
   const imports: Imports = {};
   const helpers = new Set<"Combobox" | "DatePicker">();
-  const blocks: string[] = [];
   let usesToISO = false;
 
-  for (const spec of fields) {
-    const pick = picks[spec.id];
-    const component = resolveComponent(spec, pick);
-    const block = fieldBlock(spec, component, (pick?.sensitive ?? 0) >= 0.5);
-    for (const [module, names] of Object.entries(block.imports)) addImport(imports, module, ...names);
-    for (const h of block.helpers) helpers.add(h);
-    if (component === "date-input") usesToISO = true;
-    blocks.push(indent(block.code, 8));
-  }
+  // Same sections and column widths as the live preview: from the layout picks, else from the rules.
+  const sections = groupSections(
+    fields,
+    fields.map((f) => picks[f.id]?.layout),
+  );
+  const sectionCode = sections
+    .map((section) => {
+      const inner = section.fields.map((spec) => {
+        const pick = picks[spec.id];
+        const component = resolveComponent(spec, pick);
+        const block = fieldBlock(spec, component, (pick?.sensitive ?? 0) >= 0.5);
+        for (const [module, names] of Object.entries(block.imports)) addImport(imports, module, ...names);
+        for (const h of block.helpers) helpers.add(h);
+        if (component === "date-input") usesToISO = true;
+        return [`<div className=${attr(SPAN[widthFor(spec, pick?.layout)])}>`, indent(block.code, 2), `</div>`].join("\n");
+      });
+      return [
+        `<section className="space-y-3">`,
+        `  <h3 className="border-b pb-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">${jsxText(section.title)}</h3>`,
+        `  <div className="grid grid-cols-1 gap-x-4 gap-y-5 lg:grid-cols-6">`,
+        indent(inner.join("\n\n"), 4),
+        `  </div>`,
+        `</section>`,
+      ].join("\n");
+    })
+    .join("\n\n");
   if (helpers.has("Combobox")) {
     addImport(imports, "@/components/ui/command", "Command", "CommandEmpty", "CommandGroup", "CommandInput", "CommandItem", "CommandList");
     addImport(imports, "@/components/ui/form", "FormControl");
@@ -474,7 +494,7 @@ export function generatedFormCode(input: CodegenInput): string {
       `          <p className="text-sm text-muted-foreground">Validated by the generated Zod schema.</p>`,
       `        </div>`,
       ``,
-      blocks.join("\n\n"),
+      indent(sectionCode, 8),
       ``,
       `        <div className="flex gap-2">`,
       `          <Button type="submit">Submit</Button>`,
