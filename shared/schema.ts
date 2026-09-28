@@ -58,39 +58,55 @@ export function defaultValueFor(f: FieldSpec, component: string): unknown {
   }
 }
 
+/** A string list as TypeScript source, wrapped when it would get too long for one line. */
+export const codeList = (xs: readonly string[], indent = "  "): string => {
+  const items = xs.map((x) => JSON.stringify(x));
+  const oneLine = `[${items.join(", ")}]`;
+  if (oneLine.length <= 100) return oneLine;
+  return `[\n${items.map((item) => `${indent}${item},`).join("\n")}\n]`;
+};
+
+/** One field → the Zod expression that validates it, as source code. Shared by the Schema and Component tabs. */
+export function zodCodeForField(f: FieldSpec): string {
+  const req = JSON.stringify(`${f.label} is required`);
+  switch (f.kind) {
+    case "string": {
+      let s = f.format === "email" ? `z.email()` : f.format === "url" ? `z.url()` : `z.string()`;
+      if (!f.format && f.required) s += `.min(${Math.max(1, f.min ?? 1)}, ${req})`;
+      else if (!f.format && f.min) s += `.min(${f.min})`;
+      if (!f.format && f.max != null) s += `.max(${f.max})`;
+      return f.required ? s : `${s}.or(z.literal(""))`;
+    }
+    case "number": {
+      let s = `z.number()`;
+      if (f.min != null) s += `.min(${f.min})`;
+      if (f.max != null) s += `.max(${f.max})`;
+      return f.required ? s : `${s}.optional()`;
+    }
+    case "boolean":
+      return f.required ? `z.boolean().refine((v) => v, ${req})` : `z.boolean()`;
+    case "enum": {
+      const opts = f.options ?? [];
+      // `z.enum([])` does not compile, so an option-less list falls back to a plain string.
+      if (!opts.length) return `z.string()${f.required ? "" : ".optional()"}`;
+      return `z.enum(${codeList(opts)})${f.required ? "" : ".optional()"}`;
+    }
+    case "multi": {
+      const opts = f.options ?? [];
+      const a = opts.length ? `z.array(z.enum(${codeList(opts)}))` : `z.array(z.string())`;
+      return `${a}${f.required ? `.min(1)` : ""}`;
+    }
+    case "date":
+      return `z.date()${f.required ? "" : ".optional()"}`;
+  }
+}
+
 /** Field specs → Zod source code, for the Code tab. */
 export function schemaToCode(fields: FieldSpec[]): string {
-  const q = (s: string) => JSON.stringify(s);
-  const line = (f: FieldSpec) => {
-    const req = q(`${f.label} is required`);
-    switch (f.kind) {
-      case "string": {
-        let s = f.format === "email" ? `z.email()` : f.format === "url" ? `z.url()` : `z.string()`;
-        if (!f.format && f.required) s += `.min(${Math.max(1, f.min ?? 1)}, ${req})`;
-        else if (!f.format && f.min) s += `.min(${f.min})`;
-        if (!f.format && f.max != null) s += `.max(${f.max})`;
-        return f.required ? s : `${s}.or(z.literal(""))`;
-      }
-      case "number": {
-        let s = `z.number()`;
-        if (f.min != null) s += `.min(${f.min})`;
-        if (f.max != null) s += `.max(${f.max})`;
-        return f.required ? s : `${s}.optional()`;
-      }
-      case "boolean":
-        return f.required ? `z.boolean().refine((v) => v, ${req})` : `z.boolean()`;
-      case "enum":
-        return `z.enum(${JSON.stringify(f.options ?? [])})${f.required ? "" : ".optional()"}`;
-      case "multi":
-        return `z.array(z.enum(${JSON.stringify(f.options ?? [])}))${f.required ? `.min(1)` : ""}`;
-      case "date":
-        return `z.date()${f.required ? "" : ".optional()"}`;
-    }
-  };
   const body = fields
     .map((f) => {
-      const desc = f.description ? `.describe(${q(f.description)})` : "";
-      return `  ${f.name}: ${line(f)}${desc},`;
+      const desc = f.description ? `.describe(${JSON.stringify(f.description)})` : "";
+      return `  ${f.name}: ${zodCodeForField(f)}${desc},`;
     })
     .join("\n");
   return `import { z } from "zod";\n\nexport const formSchema = z.object({\n${body}\n});\n\nexport type FormValues = z.infer<typeof formSchema>;\n`;

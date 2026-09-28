@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type RenderProps = {
   field: ControllerRenderProps<FieldValues, string>;
@@ -160,30 +161,17 @@ export const RENDERERS: Record<string, (p: RenderProps) => React.ReactNode> = {
     );
   },
 
-  chips: ({ field, spec }) => {
-    const value: string[] = field.value ?? [];
-    return (
-      <div className="flex flex-wrap gap-2">
-        {spec.options?.map((o) => {
-          const on = value.includes(o);
-          return (
-            <Button
-              key={o}
-              type="button"
-              size="sm"
-              variant={on ? "default" : "outline"}
-              aria-pressed={on}
-              className="rounded-full"
-              onClick={() => field.onChange(on ? value.filter((v) => v !== o) : [...value, o])}
-            >
-              {on && <CheckIcon />}
-              {o}
-            </Button>
-          );
-        })}
-      </div>
-    );
-  },
+  chips: ({ field, spec }) => (
+    <FormControl>
+      <ToggleGroup type="multiple" variant="outline" spacing={2} className="flex-wrap" value={field.value ?? []} onValueChange={field.onChange}>
+        {spec.options?.map((o) => (
+          <ToggleGroupItem key={o} value={o} className="rounded-full">
+            {o}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </FormControl>
+  ),
 
   "date-picker": (p) => <DatePicker {...p} />,
 

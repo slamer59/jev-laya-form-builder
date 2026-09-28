@@ -15,7 +15,7 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 - **Manual overrides** — change any field’s component from the preview; “↺ Let Jev decide” gives control back.
 - **Live, validated preview** — a real `react-hook-form` + Zod form you can fill in and submit; submitted values are shown as JSON.
 - **Decisions tab** — per field, the probability for every candidate component and where the pick came from (`Jev`, `Rule`, `Only option`, `Jev unsure`, `Your choice`).
-- **Code tab** — the Zod schema for the form as ready-to-paste TypeScript.
+- **Code tab** — three sub-tabs, each with copy-to-clipboard: a complete self-contained `<GeneratedForm />` (react-hook-form + zodResolver + the picked shadcn components, downloadable as `.tsx`), the Zod schema, and the exact `npx shadcn@latest add …` / `npm install …` commands that file needs.
 - **Presets** — Job application, Product feedback and Account sign-up, to get going in one click.
 - **Cheap and stable** — picks are cached per field spec, so editing one field only re-asks about that field; requests are debounced.
 - **Never breaks** — no API key, a failed call or a low-confidence answer all fall back to plain rules. Latency, model name and token usage are shown in the header.
@@ -78,6 +78,8 @@ The first run downloads PyTorch and the checkpoint (a few GB). Until Laya is up,
 | `build`            | Typecheck and build the web app into `dist/`                   |
 | `start`            | Production server: API plus the built app on :3001             |
 | `typecheck`        | TypeScript check                                               |
+| `verify:codegen`   | Generate the Code tab for every preset into `src/__generated__/` and compile it with `tsc` |
+| `shadcn:sync`      | Read `shared/catalog.ts` and `shadcn add` any missing component (`--dry-run` to preview) |
 
 ## How it works
 
@@ -107,16 +109,19 @@ const res = await client.systemOne({ state: { form_purpose, fields }, questions 
 
 **5. One spec, everything else derived.** `FieldSpec[]` → Zod schema → `react-hook-form` resolver → renderer per component id (`shared/schema.ts`, `src/catalog-render.tsx`).
 
-**6. The key stays on the server.** The Vite app only calls `POST /api/pick` on the small Hono server.
+**6. The same spec exports a real file.** `shared/codegen.ts` turns the current picks into a self-contained `<GeneratedForm />` — imports, schema, defaults and one `<FormField>` per field — plus the shadcn/npm install commands it needs. Its templates mirror `src/catalog-render.tsx`. `bun run verify:codegen` writes every preset to `src/__generated__/` and compiles the output against this repo’s own shadcn components, so the exported file is known to typecheck.
 
-**7. The eval uses the same code path.** `bun run eval` runs `scripts/eval.ts`, which imports `pickComponents` in-process (no API server needed), runs the presets through rules, Laya and Jev, and compares the picks against `shared/expected.ts`.
+**7. The key stays on the server.** The Vite app only calls `POST /api/pick` on the small Hono server.
+
+**8. The eval uses the same code path.** `bun run eval` runs `scripts/eval.ts`, which imports `pickComponents` in-process (no API server needed), runs the presets through rules, Laya and Jev, and compares the picks against `shared/expected.ts`.
 
 ### Adding a component
 
 1. Add an entry to `CATALOG` in `shared/catalog.ts` (id, accepted value types, `when` description).
 2. Add a renderer for that id in `src/catalog-render.tsx`.
+3. Add a JSX template and a registry mapping for it in `shared/codegen.ts`.
 
-The model can start choosing it right away.
+The model can start choosing it right away. `bun run shadcn:sync` installs any component file the catalogue needs and tells you which ids still have no renderer — the templates themselves stay hand-written.
 
 ## Project layout
 
@@ -128,15 +133,18 @@ server/
 shared/
   catalog.ts      Component catalogue + rule-based fallbacks
   schema.ts       FieldSpec → Zod schema (runtime and source code)
+  codegen.ts      Picks → <GeneratedForm /> source + shadcn/npm install commands
   types.ts        FieldSpec, Pick, Backend, request/response types
   expected.ts     Right answer per preset field, for the eval
 scripts/
   eval.ts         Scores each backend against shared/expected.ts
+  verify-codegen.ts    Generate every preset and tsc the result (verify:codegen)
+  shadcn-sync.ts       `shadcn add` whatever the catalogue is missing (shadcn:sync)
 src/
   App.tsx         Builder, tabs, threshold, backend selector, status header
   presets.ts      Example forms
   catalog-render.tsx   Component id → shadcn renderer
-  components/     FieldEditor, FormPreview, PickBadge, BackendPicker, shadcn ui/
+  components/     FieldEditor, FormPreview, PickBadge, BackendPicker, CodeTab, shadcn ui/
 ```
 
 ## Notes on Laya

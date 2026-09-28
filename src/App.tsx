@@ -1,10 +1,10 @@
 import * as React from "react";
 import { Loader2Icon, PlusIcon, SparklesIcon } from "lucide-react";
-import { candidatesFor, CATALOG } from "@shared/catalog";
-import { schemaToCode } from "@shared/schema";
+import { candidatesFor } from "@shared/catalog";
 import type { Backend, FieldSpec, Pick, PickResponse } from "@shared/types";
 import { PRESETS, newFieldId } from "@/presets";
 import { BackendPicker } from "@/components/BackendPicker";
+import { CodeTab } from "@/components/CodeTab";
 import { FieldEditor } from "@/components/FieldEditor";
 import { FormPreview } from "@/components/FormPreview";
 import { PickBadge } from "@/components/PickBadge";
@@ -304,21 +304,7 @@ export default function App() {
             </TabsContent>
 
             <TabsContent value="code">
-              <div className="grid gap-4">
-                <CodeCard title="schema.ts" code={schemaToCode(fields)} />
-                <CodeCard
-                  title="form.json (render anywhere with FormPreview)"
-                  code={JSON.stringify(
-                    { purpose, fields: fields.map(({ id: _id, ...f }) => ({ ...f, component: picks[_id]?.component })) },
-                    null,
-                    2,
-                  )}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Catalogue: {CATALOG.map((c) => c.name).join(", ")}. Add one in <code>shared/catalog.ts</code> and{" "}
-                  <code>src/catalog-render.tsx</code> and Jev can start choosing it.
-                </p>
-              </div>
+              <CodeTab purpose={purpose} fields={fields} picks={picks} />
             </TabsContent>
           </Tabs>
         </section>
@@ -338,28 +324,5 @@ function ModeBadge({ mode }: { mode: Backend | "offline" | null }) {
     );
   if (mode === "offline") return <Badge variant="destructive">Server offline</Badge>;
   return null;
-}
-
-function CodeCard({ title, code }: { title: string; code: string }) {
-  const [copied, setCopied] = React.useState(false);
-  return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="font-mono text-xs">{title}</span>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            navigator.clipboard.writeText(code);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
-        >
-          {copied ? "Copied" : "Copy"}
-        </Button>
-      </div>
-      <pre className="max-h-[480px] overflow-auto bg-muted/40 p-4 text-xs leading-relaxed">{code}</pre>
-    </Card>
-  );
 }
 
