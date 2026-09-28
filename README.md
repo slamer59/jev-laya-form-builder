@@ -28,7 +28,7 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 - **Local mode with Laya** — one script runs Laya on your machine with `uvx`; nothing to install, no API key, no network calls after the first model download.
 - **Evaluation** — `bun run eval` runs the three presets through every available backend and prints accuracy, average confidence, latency and per-field mismatches.
 - **Never breaks** — no API key, a failed call or a low-confidence answer all fall back to plain rules. Latency, model name and token usage are shown in the header.
-- **Cheap and stable** — picks are cached per field spec, so editing one field only re-asks about that field; requests are debounced.
+- **Cheap and stable** — picks are cached per field spec, so editing one field only re-asks about that field; requests are debounced. The cache lives in this app’s API, not in Laya: when every field is cached nothing is sent to the model, which is why the header can read “0 ms”. *In progress (`feat/backend-gate`):* the header will say how many picks were asked vs served from cache (“Laya · all cached”, “3 asked, 7 cached · 540 ms”), with an optional **Re-ask** that bypasses the cache.
 
 ### Export
 
@@ -225,6 +225,19 @@ src/
 | Jev     | not measured yet   |               |             |                |                 |
 
 The rules score is flattering: they were written with these same presets in mind. The gated Laya score is mostly the rules taking over from low-confidence picks. Fine-tuning Laya on form-field decisions would be the way to close the gap.
+
+## How it was built
+
+After the first version, the features above were built in parallel by five omp (oh-my-pi) coding agents, each in its own git worktree and branch, started and coordinated through [herdr](https://herdr.dev). An orchestrator (Claude Code) wrote each brief, checked every branch (typecheck, build, `test:import`, `verify:codegen`) and merged them into `master` one at a time. Each agent rebased onto the latest `master` before reporting back, so every merge was a fast-forward.
+
+| Agent        | Branch                  | Scope                                                                                          | Status |
+| ------------ | ----------------------- | ---------------------------------------------------------------------------------------------- | ------ |
+| `gate`       | `feat/backend-gate`     | Confidence gate on `answer_confidence`, Jev / Laya / rules switch, `bun run eval`               | Merged (`df20d5b`) |
+| `export`     | `feat/form-export`      | Full `<GeneratedForm />` export, install commands, `verify:codegen`, `shadcn:sync`             | Merged (`7cc14a3`) |
+| `share`      | `feat/import-share`     | Import JSON Schema / Zod, JSON Schema + uiSchema save format, share links, autosave            | Merged (`78a98e4`) |
+| `layout`     | `feat/form-layout`      | Model-driven width and sections, responsive grid, layout in the generated code                 | Merged (`c890361`) |
+| `components` | `feat/more-components`  | 9 new components, 4 new value types (time, date range, number range, file)                     | Merged (`de6acb9`) |
+| `gate`       | `feat/backend-gate`     | Follow-up: show asked vs cached picks instead of a bare “0 ms”, optional Re-ask                 | In progress (committed `e3363df`, not yet reviewed) |
 
 ## Stack
 
