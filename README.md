@@ -33,6 +33,12 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 - **Code tab** — three sub-tabs, each with copy-to-clipboard: a complete self-contained `<GeneratedForm />` (react-hook-form + zodResolver + the picked shadcn components, downloadable as `.tsx`), the Zod schema, and the exact `npx shadcn@latest add …` / `npm install …` commands that file needs.
 - **Verified output** — `bun run verify:codegen` compiles the generated file for every preset, and `bun run shadcn:sync` installs any shadcn component the catalogue needs.
 
+### Import and share
+
+- **Import** — paste a JSON Schema object, a file exported by this builder, or a Zod `z.object({ … })` source snippet (parsed by hand, never evaluated). Type, format, enum, `items.enum`, bounds, required list, title and hint are mapped; `ui:widget` becomes a component override; anything the builder cannot express is listed as a warning before you apply it.
+- **Save and share** — the form (purpose, fields, threshold, overrides) is kept in the URL hash, compressed and URL-safe, so the address bar is already a working link; **Copy link** puts it on the clipboard. localStorage autosaves the same document, and a plain URL with no hash restores it.
+- **Export / import the document** — **Export JSON** downloads `{ "schema": …, "uiSchema": … }`: JSON Schema draft 2020-12 (`description` = purpose, `title` = label, `description` = hint, `enum`, `items.enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `format: date | email | uri`, `required`, `x-threshold`) plus an RJSF-style uiSchema (`ui:order`, `ui:widget`). Importing that file back rebuilds exactly the same fields, and `bun run test:import` checks it for all three presets.
+
 ### Component catalogue
 
 | Value type        | Components                          |
@@ -90,6 +96,7 @@ The first run downloads PyTorch and the checkpoint (a few GB). Until Laya is up,
 | `build`            | Typecheck and build the web app into `dist/`                   |
 | `start`            | Production server: API plus the built app on :3001             |
 | `typecheck`        | TypeScript check                                               |
+| `test:import`      | Assert the JSON Schema ↔ `FieldSpec` mapping, the `{ schema, uiSchema }` round-trip for every preset, and the share codec |
 | `verify:codegen`   | Generate the Code tab for every preset into `src/__generated__/` and compile it with `tsc` |
 | `shadcn:sync`      | Read `shared/catalog.ts` and `shadcn add` any missing component (`--dry-run` to preview) |
 
@@ -127,6 +134,8 @@ const res = await client.systemOne({ state: { form_purpose, fields }, questions 
 
 **8. The eval uses the same code path.** `bun run eval` runs `scripts/eval.ts`, which imports `pickComponents` in-process (no API server needed), runs the presets through rules, Laya and Jev, and compares the picks against `shared/expected.ts`.
 
+**9. The saved form is JSON Schema + uiSchema.** `shared/import.ts` maps `FieldSpec[]` both ways: purpose → `schema.description`, label and hint → `title` / `description`, `required` → `schema.required`, kind → `type` / `format` / `enum` / `items.enum`, overrides → `uiSchema[name]["ui:widget"]`, field order → `uiSchema["ui:order"]` and the threshold → `schema["x-threshold"]`. The downloaded file, the URL hash and the localStorage autosave are that one document, so a link and a file are interchangeable; `bun run test:import` proves every preset round-trips to the same fields, and any general JSON Schema can be read, with a warning for each part the builder has no equivalent for.
+
 ### Adding a component
 
 1. Add an entry to `CATALOG` in `shared/catalog.ts` (id, accepted value types, `when` description).
@@ -148,6 +157,8 @@ shared/
   codegen.ts      Picks → <GeneratedForm /> source + shadcn/npm install commands
   types.ts        FieldSpec, Pick, Backend, request/response types
   expected.ts     Right answer per preset field, for the eval
+  import.ts       JSON Schema + uiSchema ⇄ FieldSpec, Zod snippet parser, share document
+  form-json.ts    In-memory SavedForm model (field ids stay runtime-only)
 scripts/
   eval.ts         Scores each backend against shared/expected.ts
   verify-codegen.ts    Generate every preset and tsc the result (verify:codegen)
@@ -155,8 +166,9 @@ scripts/
 src/
   App.tsx         Builder, tabs, threshold, backend selector, status header
   presets.ts      Example forms
+  persist.ts      URL hash + localStorage autosave, copy link, export JSON
   catalog-render.tsx   Component id → shadcn renderer
-  components/     FieldEditor, FormPreview, PickBadge, BackendPicker, CodeTab, shadcn ui/
+  components/     FieldEditor, FormPreview, PickBadge, BackendPicker, CodeTab, ImportDialog, shadcn ui/
 ```
 
 ## Notes on Laya
@@ -187,7 +199,6 @@ In progress on separate branches:
 
 - **Model-driven layout** — the model also decides each field’s width (full, half, third) and where sections start; the preview becomes a responsive grid with section headings.
 - **More components and value types** — toggle group, stepper, star rating, input with prefix/suffix; new types for time, date range, number range and file upload.
-- **Import, save and share** — forms saved as JSON Schema + an RJSF-style `uiSchema`, shareable by link, autosaved locally; import from JSON Schema or a Zod snippet.
 
 ## Stack
 
