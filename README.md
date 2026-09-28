@@ -8,8 +8,10 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 
 - **Form builder UI** — add, edit, reorder and remove fields; set label, key, value type, required, hint, email/URL format, options and min/max.
 - **AI component picking** — for each field, the model chooses among the components that can hold its value type (e.g. *Slider* vs *Number input* for a rating), reading the whole form as context.
+- **Backend switch** — the header picks who answers: hosted **Jev**, **Laya** on your machine, or **rules only**. `/api/status` probes what is reachable (Jev needs a key, Laya needs `/health`), the selector defaults to the best of the three, and the choice is part of the cache key.
 - **Secret detection** — every text field also gets a yes/no question: “should this be masked while typing?” (passwords, card numbers…).
-- **Confidence gate** — a threshold slider decides when to trust the model; below it, the pick falls back to a rule-based default and the badge shows what the model leaned towards.
+- **Confidence gate** — a threshold slider decides when to trust the model; below it, the pick falls back to a rule-based default and the badge shows what the model leaned towards. The number is the probability of the chosen option on every backend, so the slider means the same thing with Jev and Laya.
+- **Evaluation** — `bun run eval` runs the three presets through every available backend and prints accuracy, average confidence, latency and per-field mismatches.
 - **Manual overrides** — change any field’s component from the preview; “↺ Let Jev decide” gives control back.
 - **Live, validated preview** — a real `react-hook-form` + Zod form you can fill in and submit; submitted values are shown as JSON.
 - **Decisions tab** — per field, the probability for every candidate component and where the pick came from (`Jev`, `Rule`, `Only option`, `Jev unsure`, `Your choice`).
@@ -58,11 +60,11 @@ This starts, side by side:
 | Process | What it does                                                                 |
 | ------- | ---------------------------------------------------------------------------- |
 | `laya`  | `laya-serve` via `uvx` on http://localhost:8000 (English checkpoint, CPU)     |
-| `api`   | The Hono API on :3001, pointed at Laya with `TYPESAFE_BASE_URL`              |
+| `api`   | The Hono API on :3001, pointed at Laya with `LAYA_URL`                       |
 | `web`   | Vite on http://localhost:5173                                                |
 | `open`  | Waits for Laya to be healthy, then opens its API docs at `/docs`             |
 
-The first run downloads PyTorch and the checkpoint (a few GB). Until Laya is up, picks come from the rules. Your `.env` is not needed or changed: the script sets the base URL and a placeholder key itself.
+The first run downloads PyTorch and the checkpoint (a few GB). Until Laya is up, picks come from the rules. Your `.env` is not needed or changed: the script sets `LAYA_URL` and the Laya client uses a placeholder key.
 
 ## Scripts
 
@@ -72,6 +74,7 @@ The first run downloads PyTorch and the checkpoint (a few GB). Until Laya is up,
 | `dev:laya`         | Laya + API + web, fully local                                  |
 | `laya`             | Laya server only, on CPU                                       |
 | `laya:gpu`         | Laya server only, on CUDA, all checkpoints preloaded           |
+| `eval`             | Score every available backend against `shared/expected.ts`     |
 | `build`            | Typecheck and build the web app into `dist/`                   |
 | `start`            | Production server: API plus the built app on :3001             |
 | `typecheck`        | TypeScript check                                               |
@@ -98,11 +101,15 @@ if (f.kind === "string")
 const res = await client.systemOne({ state: { form_purpose, fields }, questions });
 ```
 
-**3. Confidence gate.** Act on the pick when the model is sure, otherwise use `ruleFor(field)`.
+**3. Confidence gate.** Act on the pick when the model is sure, otherwise use `ruleFor(field)`. Laya reports the margin between the top two options in `confidence` and the probability of the chosen option in `answer_confidence`; Jev only has `confidence`. `server/pick.ts` reads `answer_confidence` when present, so `Pick.confidence` is always a probability.
 
-**4. One spec, everything else derived.** `FieldSpec[]` → Zod schema → `react-hook-form` resolver → renderer per component id (`shared/schema.ts`, `src/catalog-render.tsx`).
+**4. Backends are a runtime choice.** `server/backends.ts` owns the three clients: Jev (needs `TYPESAFE_API_KEY`), Laya (same SDK, `baseURL` from `LAYA_URL`, default `http://localhost:8000`, placeholder key) and rules. `POST /api/pick` takes an optional `backend`; `GET /api/status` reports which are reachable, and the header selector defaults to the best one. The pick cache key includes the backend, so switching never serves the other backend’s answers.
 
-**5. The key stays on the server.** The Vite app only calls `POST /api/pick` on the small Hono server.
+**5. One spec, everything else derived.** `FieldSpec[]` → Zod schema → `react-hook-form` resolver → renderer per component id (`shared/schema.ts`, `src/catalog-render.tsx`).
+
+**6. The key stays on the server.** The Vite app only calls `POST /api/pick` on the small Hono server.
+
+**7. The eval uses the same code path.** `bun run eval` runs `scripts/eval.ts`, which imports `pickComponents` in-process (no API server needed), runs the presets through rules, Laya and Jev, and compares the picks against `shared/expected.ts`.
 
 ### Adding a component
 
@@ -116,25 +123,31 @@ The model can start choosing it right away.
 ```
 server/
   index.ts        Hono API: /api/status, /api/pick, static files in production
+  backends.ts     Jev / Laya / rules: clients, health probe, best-available choice
   pick.ts         Candidate filtering, model call, caching, confidence gate
 shared/
   catalog.ts      Component catalogue + rule-based fallbacks
   schema.ts       FieldSpec → Zod schema (runtime and source code)
-  types.ts        FieldSpec, Pick, request/response types
+  types.ts        FieldSpec, Pick, Backend, request/response types
+  expected.ts     Right answer per preset field, for the eval
+scripts/
+  eval.ts         Scores each backend against shared/expected.ts
 src/
-  App.tsx         Builder, tabs, threshold, status header
+  App.tsx         Builder, tabs, threshold, backend selector, status header
   presets.ts      Example forms
   catalog-render.tsx   Component id → shadcn renderer
-  components/     FieldEditor, FormPreview, PickBadge, shadcn ui/
+  components/     FieldEditor, FormPreview, PickBadge, BackendPicker, shadcn ui/
 ```
 
 ## Notes on Laya
 
-`laya-serve` speaks the same `POST /v1/systemone` protocol as Jev, and `@typesafe-ai/sdk` reads `TYPESAFE_BASE_URL`, so no code changes are needed to switch.
+`laya-serve` speaks the same `POST /v1/systemone` protocol as Jev, so the same SDK talks to both; only the base URL, the API key and the timeout differ (`server/backends.ts`).
 
 - The base Laya checkpoints are not fine-tuned for this task, so expect weaker and less confident picks than Jev; more fields will land on the rule default.
-- Laya’s `confidence` behaves like a margin between options (near 0 when two options are close), while `answer_confidence` is the probability of the chosen option. The gate currently reads `confidence`, so with Laya most picks fall below the threshold.
+- Laya’s `confidence` behaves like a margin between options (near 0 when two options are close), while `answer_confidence` is the probability of the chosen option. The gate reads `answer_confidence` when present, so both backends gate on a probability.
+- On CPU a full preset is a single request of roughly 15 seconds (10 fields, CPU-only, English checkpoint), so the Laya client overrides the SDK’s 10-second default timeout with 120 seconds. Jev keeps the default.
 - Yes/no (`noul`) answers are less reliable on the English checkpoint; check the “masked” flags.
+- `bun run eval` prints the whole picture per backend: component accuracy, accuracy under the default gate, masked-flag accuracy, average confidence and latency.
 
 ## Stack
 

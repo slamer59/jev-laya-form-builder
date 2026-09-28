@@ -2,8 +2,9 @@ import * as React from "react";
 import { Loader2Icon, PlusIcon, SparklesIcon } from "lucide-react";
 import { candidatesFor, CATALOG } from "@shared/catalog";
 import { schemaToCode } from "@shared/schema";
-import type { FieldSpec, Pick, PickResponse } from "@shared/types";
+import type { Backend, FieldSpec, Pick, PickResponse } from "@shared/types";
 import { PRESETS, newFieldId } from "@/presets";
+import { BackendPicker } from "@/components/BackendPicker";
 import { FieldEditor } from "@/components/FieldEditor";
 import { FormPreview } from "@/components/FormPreview";
 import { PickBadge } from "@/components/PickBadge";
@@ -38,23 +39,38 @@ export default function App() {
   const [overrides, setOverrides] = React.useState<Record<string, string>>({});
   const [res, setRes] = React.useState<PickResponse | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const [serverMode, setServerMode] = React.useState<"jev" | "rules" | "offline" | null>(null);
+  const [serverMode, setServerMode] = React.useState<Backend | "offline" | null>(null);
+  const [backends, setBackends] = React.useState<Record<Backend, boolean> | null>(null);
+  const [backend, setBackend] = React.useState<Backend | null>(null);
 
   React.useEffect(() => {
     fetch("/api/status")
       .then((r) => r.json())
-      .then((s) => setServerMode(s.mode))
+      .then((s) => {
+        setServerMode(s.mode);
+        setBackends(s.backends ?? null);
+        setBackend((b) => b ?? s.mode); // best available, until the user picks another
+      })
       .catch(() => setServerMode("offline"));
   }, []);
 
-  // Ask the server (and Jev) whenever the form settles for a moment.
-  const request = useDebounced(React.useMemo(() => ({ purpose, fields, threshold }), [purpose, fields, threshold]), 500);
+  // Ask the server (and the model) whenever the form settles for a moment.
+  const request = useDebounced(
+    React.useMemo(
+      () => ({ purpose, fields, threshold, ...(backend && { backend }) }),
+      [purpose, fields, threshold, backend],
+    ),
+    500,
+  );
   React.useEffect(() => {
     const ctrl = new AbortController();
     setLoading(true);
     fetch("/api/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal: ctrl.signal })
       .then((r) => r.json())
-      .then((data: PickResponse) => setRes(data))
+      .then((data: PickResponse) => {
+        setRes(data);
+        setServerMode(data.mode); // reflect which backend actually answered
+      })
       .catch((e) => e.name !== "AbortError" && setServerMode("offline"))
       .finally(() => !ctrl.signal.aborted && setLoading(false));
     return () => ctrl.abort();
@@ -99,7 +115,7 @@ export default function App() {
   };
 
   const previewKey = fields.map((f) => `${JSON.stringify(f)}:${picks[f.id]?.component}`).join("|");
-  const jevCount = Object.values(picks).filter((p) => p.source === "jev").length;
+  const modelCount = Object.values(picks).filter((p) => p.source === "jev" || p.source === "laya").length;
 
   return (
     <div className="min-h-screen bg-muted/30">
@@ -116,12 +132,13 @@ export default function App() {
                 {res.latencyMs} ms
               </span>
             )}
+            <BackendPicker value={backend} available={backends} onChange={setBackend} />
             <ModeBadge mode={serverMode} />
           </div>
         </div>
         {res?.error && (
           <div className="border-t bg-amber-50 px-4 py-2 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-            Jev call failed, so rules were used instead: {res.error}
+            The model call failed, so rules were used instead: {res.error}
           </div>
         )}
       </header>
@@ -241,8 +258,8 @@ export default function App() {
                 <CardHeader>
                   <CardTitle className="text-base">How each component was chosen</CardTitle>
                   <CardDescription>
-                    Code keeps only the components that can hold the value type. Jev picks among the rest, one isolated question per field, all in one
-                    request. {jevCount > 0 && `${jevCount} of ${fields.length} picks came from Jev.`}
+                    Code keeps only the components that can hold the value type. The model picks among the rest, one isolated question per field, all in one
+                    request. {modelCount > 0 && `${modelCount} of ${fields.length} picks came from the model.`}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -310,12 +327,13 @@ export default function App() {
   );
 }
 
-function ModeBadge({ mode }: { mode: "jev" | "rules" | "offline" | null }) {
+function ModeBadge({ mode }: { mode: Backend | "offline" | null }) {
   if (mode === "jev") return <Badge className="bg-emerald-600 text-white">Jev live</Badge>;
+  if (mode === "laya") return <Badge className="bg-sky-600 text-white">Laya local</Badge>;
   if (mode === "rules")
     return (
-      <Badge variant="outline" title="Set TYPESAFE_API_KEY in .env and restart to let Jev decide">
-        No API key · rules fallback
+      <Badge variant="outline" title="No model available: set TYPESAFE_API_KEY in .env, or start Laya, and reload">
+        Rules only
       </Badge>
     );
   if (mode === "offline") return <Badge variant="destructive">Server offline</Badge>;

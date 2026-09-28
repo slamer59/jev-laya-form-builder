@@ -3,16 +3,21 @@ import { existsSync } from "node:fs";
 // Load .env if present (Node 20.12+ has this built in).
 if (existsSync(".env")) process.loadEnvFile(".env");
 
+// Dynamic imports: `.env` must be loaded above before a module reads its keys from process.env.
 const { Hono } = await import("hono");
 const { serve } = await import("@hono/node-server");
 const { serveStatic } = await import("@hono/node-server/serve-static");
-const { pickComponents, jevEnabled } = await import("./pick");
+const { pickComponents } = await import("./pick");
+const { availability, bestOf, LAYA_URL } = await import("./backends");
 const { CATALOG } = await import("../shared/catalog");
-type PickRequest = import("../shared/types").PickRequest;
+import type { PickRequest } from "../shared/types";
 
 const app = new Hono();
 
-app.get("/api/status", (c) => c.json({ mode: jevEnabled ? "jev" : "rules", catalog: CATALOG.length }));
+app.get("/api/status", async (c) => {
+  const backends = await availability();
+  return c.json({ mode: bestOf(backends), backends, catalog: CATALOG.length, layaUrl: LAYA_URL });
+});
 
 app.post("/api/pick", async (c) => {
   const body = (await c.req.json()) as PickRequest;
@@ -27,6 +32,8 @@ if (process.env.NODE_ENV === "production") {
 }
 
 const port = Number(process.env.PORT ?? 3001);
-serve({ fetch: app.fetch, port }, () => {
-  console.log(`API on http://localhost:${port} — ${jevEnabled ? "Jev is live" : "no TYPESAFE_API_KEY, using rules fallback"}`);
+serve({ fetch: app.fetch, port }, async () => {
+  const a = await availability();
+  const up = (["jev", "laya", "rules"] as const).filter((b) => a[b]);
+  console.log(`API on http://localhost:${port} — ${up.join(" + ")} available, default ${bestOf(a)}${a.laya ? "" : ` (no Laya on ${LAYA_URL})`}`);
 });

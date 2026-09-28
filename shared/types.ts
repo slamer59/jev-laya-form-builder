@@ -30,25 +30,38 @@ export type FormSpec = {
 };
 
 /** Where a component pick came from. */
-export type PickSource = "jev" | "only-option" | "rules" | "low-confidence" | "override";
+export type PickSource = "jev" | "laya" | "only-option" | "rules" | "low-confidence" | "override";
+
+/** Who answers the questions: hosted Jev, local Laya (same protocol), or no model at all. */
+export type Backend = "jev" | "laya" | "rules";
+
+export const BACKENDS: { value: Backend; label: string }[] = [
+  { value: "jev", label: "Jev (hosted)" },
+  { value: "laya", label: "Laya (local)" },
+  { value: "rules", label: "Rules only" },
+];
 
 export type Pick = {
   component: string;
   source: PickSource;
-  /** Jev's confidence in its choice, when Jev was asked. */
+  /**
+   * Probability (0–1) of the chosen component, when a model was asked. Laya reports it as
+   * `answer_confidence` (Jev only has `confidence`), so this is a real probability on both.
+   */
   confidence?: number;
-  /** Jev's probability for every candidate, when Jev was asked. */
+  /** The model's probability for every candidate, when a model was asked. */
   probabilities?: Record<string, number>;
-  /** What Jev picked when the pick fell back because confidence was low. */
-  jevChoice?: string;
+  /** What the model picked when the pick fell back because confidence was low. */
+  modelChoice?: string;
   /** Probability (0–1) that the field holds sensitive data, for text fields. */
   sensitive?: number;
 };
 
-export type PickRequest = FormSpec & { threshold?: number };
+export type PickRequest = FormSpec & { threshold?: number; backend?: Backend };
 
 export type PickResponse = {
-  mode: "jev" | "rules";
+  /** Which backend actually answered: the requested one when available, else the best one. */
+  mode: Backend;
   model?: string;
   latencyMs: number;
   usage?: { input_tokens: number; output_tokens: number };

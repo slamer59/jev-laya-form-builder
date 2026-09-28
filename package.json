@@ -5,8 +5,9 @@
     "dev": "concurrently -n api,web -c blue,green \"tsx watch server/index.ts\" \"vite\"",
     "laya": "LAYA_PRELOAD=1 LAYA_MODELS=english uvx --python 3.12 --from 'laya[serve]' laya-serve",
     "laya:gpu": "LAYA_DEVICE=cuda LAYA_PRELOAD=1 uvx --python 3.12 --from 'laya[serve]' laya-serve",
-    "dev:laya": "concurrently -n laya,api,web,open -c magenta,blue,green,gray \"LAYA_PRELOAD=1 LAYA_MODELS=english uvx --python 3.12 --from 'laya[serve]' laya-serve\" \"TYPESAFE_BASE_URL=http://localhost:8000 TYPESAFE_API_KEY=local tsx watch server/index.ts\" \"vite\" \"until curl -sf localhost:8000/health >/dev/null; do sleep 1; done; xdg-open http://localhost:8000/docs\"",
+    "dev:laya": "concurrently -n laya,api,web,open -c magenta,blue,green,gray \"LAYA_PRELOAD=1 LAYA_MODELS=english uvx --python 3.12 --from 'laya[serve]' laya-serve\" \"LAYA_URL=http://localhost:8000 tsx watch server/index.ts\" \"vite\" \"until curl -sf localhost:8000/health >/dev/null; do sleep 1; done; xdg-open http://localhost:8000/docs\"",
     "build": "tsc -p . && vite build",
+    "eval": "tsx scripts/eval.ts",
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc -p ."
   },

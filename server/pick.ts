@@ -1,18 +1,26 @@
 import { createHash } from "node:crypto";
-import { choice, noul, TypeSafeClient, type Question } from "@typesafe-ai/sdk";
+import { choice, noul, type ChoiceResponse, type Question } from "@typesafe-ai/sdk";
 import { candidatesFor, looksSensitive, ruleFor } from "../shared/catalog";
-import type { FieldSpec, Pick, PickRequest, PickResponse } from "../shared/types";
+import type { Backend, FieldSpec, Pick, PickRequest, PickResponse } from "../shared/types";
+import { clients, resolveBackend } from "./backends";
 
-const apiKey = process.env.TYPESAFE_API_KEY?.trim();
-const client = apiKey ? new TypeSafeClient({ apiKey }) : null;
-export const jevEnabled = !!client;
-
-/** Picks are cached per (form purpose + field), so editing one field only re-asks for that field. */
+/** Picks are cached per (backend + form purpose + field), so editing one field only re-asks for that field. */
 const cache = new Map<string, Pick>();
-const keyFor = (purpose: string, f: FieldSpec) =>
-  createHash("sha1").update(JSON.stringify([purpose, { ...f, id: undefined }])).digest("hex");
+const keyFor = (backend: Backend, purpose: string, f: FieldSpec) =>
+  createHash("sha1").update(JSON.stringify([backend, purpose, { ...f, id: undefined }])).digest("hex");
 
-/** Describe a field to Jev without internal ids. */
+/** For tests and the eval script: forget every cached pick. */
+export const clearPickCache = () => cache.clear();
+
+/**
+ * Laya answers a choice with the margin between the top two options in `confidence` (≈0 when the
+ * options are close) and the probability of the chosen option in `answer_confidence`. Jev only has
+ * `confidence`, which already is that probability. Prefer `answer_confidence` so the stored value,
+ * the gate and the badge all speak probabilities.
+ */
+const answerProbability = (a: ChoiceResponse) => (a as ChoiceResponse & { answer_confidence?: number }).answer_confidence ?? a.confidence;
+
+/** Describe a field to the model without internal ids. */
 const describe = (f: FieldSpec) => ({
   name: f.name,
   label: f.label,
@@ -38,6 +46,8 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
   const started = performance.now();
   const threshold = req.threshold ?? 0.5;
   const picks: Record<string, Pick> = {};
+  const backend = await resolveBackend(req.backend);
+  const client = backend === "rules" ? null : clients[backend];
 
   if (!client) {
     for (const f of req.fields) picks[f.id] = rulesPick(f);
@@ -45,11 +55,11 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
   }
 
   // 1. Code filters: only components that can hold this kind of value are candidates.
-  // 2. Jev decides among the candidates, one isolated question per field, all in one request.
+  // 2. The model decides among the candidates, one isolated question per field, all in one request.
   const questions: Record<string, Question> = {};
   const pending: FieldSpec[] = [];
   for (const f of req.fields) {
-    const cached = cache.get(keyFor(req.purpose, f));
+    const cached = cache.get(keyFor(backend, req.purpose, f));
     if (cached) {
       picks[f.id] = applyThreshold(cached, f, threshold);
       continue;
@@ -85,7 +95,7 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
   if (pending.length) {
     try {
       const res = await client.systemOne({
-        // Every question sees the whole form, so Jev knows the context (a "rating" in a feedback form…).
+        // Every question sees the whole form, so the model knows the context (a "rating" in a feedback form…).
         state: {
           form_purpose: req.purpose,
           fields: req.fields.map(describe),
@@ -99,10 +109,15 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
         const s = res.answers[`s_${f.id}`];
         const raw: Pick =
           c && c.type === "choice"
-            ? { component: c.choice, source: "jev", confidence: c.confidence, probabilities: { ...c.probabilities } }
+            ? {
+                component: c.choice,
+                source: backend,
+                confidence: answerProbability(c),
+                probabilities: { ...c.probabilities },
+              }
             : { component: ruleFor(f), source: "only-option" };
         if (s && s.type === "noul") raw.sensitive = s.noul;
-        cache.set(keyFor(req.purpose, f), raw);
+        cache.set(keyFor(backend, req.purpose, f), raw);
         picks[f.id] = applyThreshold(raw, f, threshold);
       }
     } catch (e) {
@@ -112,11 +127,11 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
     }
   }
 
-  return { mode: "jev", model, usage, error, picks, latencyMs: Math.round(performance.now() - started) };
+  return { mode: backend, model, usage, error, picks, latencyMs: Math.round(performance.now() - started) };
 }
 
-/** 3. Confidence gate: act on Jev's pick when it is sure, otherwise use the rule-based default. */
+/** 3. Confidence gate: act on the model's pick when it is sure, otherwise use the rule-based default. */
 function applyThreshold(p: Pick, f: FieldSpec, threshold: number): Pick {
-  if (p.source !== "jev" || (p.confidence ?? 0) >= threshold) return p;
-  return { ...p, component: ruleFor(f), source: "low-confidence", jevChoice: p.component };
+  if ((p.source !== "jev" && p.source !== "laya") || (p.confidence ?? 0) >= threshold) return p;
+  return { ...p, component: ruleFor(f), source: "low-confidence", modelChoice: p.component };
 }
