@@ -1,12 +1,15 @@
 import * as React from "react";
-import { Loader2Icon, PlusIcon, SparklesIcon } from "lucide-react";
+import { DownloadIcon, LinkIcon, Loader2Icon, PlusIcon, SparklesIcon } from "lucide-react";
 import { candidatesFor } from "@shared/catalog";
 import type { Backend, FieldSpec, Pick, PickResponse } from "@shared/types";
+import type { ImportResult } from "@shared/import";
 import { PRESETS, newFieldId } from "@/presets";
 import { BackendPicker } from "@/components/BackendPicker";
 import { CodeTab } from "@/components/CodeTab";
+import { loadInitialState, usePersistedForm } from "@/persist";
 import { FieldEditor } from "@/components/FieldEditor";
 import { FormPreview } from "@/components/FormPreview";
+import { ImportDialog } from "@/components/ImportDialog";
 import { PickBadge } from "@/components/PickBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,18 +33,21 @@ function useDebounced<T>(value: T, ms: number) {
 }
 
 export default function App() {
-  const [preset, setPreset] = React.useState(FIRST);
-  const [purpose, setPurpose] = React.useState(PRESETS[FIRST].purpose);
-  const [fields, setFields] = React.useState<FieldSpec[]>(PRESETS[FIRST].fields);
+  // A hash (shared link) or the localStorage autosave beats the default preset.
+  const restored = React.useMemo(loadInitialState, []);
+  const [preset, setPreset] = React.useState(restored ? "" : FIRST);
+  const [purpose, setPurpose] = React.useState(restored?.purpose || PRESETS[FIRST].purpose);
+  const [fields, setFields] = React.useState<FieldSpec[]>(restored?.fields ?? PRESETS[FIRST].fields);
   const [openId, setOpenId] = React.useState<string | null>(null);
-  const [threshold, setThreshold] = React.useState(0.5);
+  const [threshold, setThreshold] = React.useState(restored?.threshold ?? 0.5);
   const [showDecisions, setShowDecisions] = React.useState(true);
-  const [overrides, setOverrides] = React.useState<Record<string, string>>({});
+  const [overrides, setOverrides] = React.useState<Record<string, string>>(restored?.overrides ?? {});
   const [res, setRes] = React.useState<PickResponse | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [serverMode, setServerMode] = React.useState<Backend | "offline" | null>(null);
   const [backends, setBackends] = React.useState<Record<Backend, boolean> | null>(null);
   const [backend, setBackend] = React.useState<Backend | null>(null);
+  const share = usePersistedForm(React.useMemo(() => ({ purpose, fields, threshold, overrides }), [purpose, fields, threshold, overrides]));
 
   React.useEffect(() => {
     fetch("/api/status")
@@ -113,6 +119,15 @@ export default function App() {
     setOverrides({});
     setOpenId(null);
   };
+  // Imported fields replace the whole form; a builder export also restores its gate and overrides.
+  const applyImport = (r: ImportResult) => {
+    setPurpose(r.purpose || purpose);
+    setFields(r.fields);
+    setOverrides(r.overrides ?? {});
+    setThreshold(r.threshold ?? threshold);
+    setPreset("");
+    setOpenId(null);
+  };
 
   const previewKey = fields.map((f) => `${JSON.stringify(f)}:${picks[f.id]?.component}`).join("|");
   const modelCount = Object.values(picks).filter((p) => p.source === "jev" || p.source === "laya").length;
@@ -124,7 +139,14 @@ export default function App() {
           <SparklesIcon className="size-5" />
           <h1 className="font-semibold">Jev Form Builder</h1>
           <span className="hidden text-sm text-muted-foreground sm:inline">shadcn · Zod · React Hook Form · Jev</span>
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="ml-auto flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Button size="sm" variant="outline" onClick={share.copyLink} title="Every change is already in the address bar">
+              <LinkIcon /> {share.copied ? "Copied" : "Copy link"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={share.exportJson}>
+              <DownloadIcon /> Export JSON
+            </Button>
+            <ImportDialog onImport={applyImport} />
             {loading && <Loader2Icon className="size-4 animate-spin" />}
             {res && !loading && (
               <span className="tabular-nums">
@@ -156,7 +178,7 @@ export default function App() {
                 <Label>Start from</Label>
                 <Select value={preset} onValueChange={loadPreset}>
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Custom / imported" />
                   </SelectTrigger>
                   <SelectContent>
                     {Object.keys(PRESETS).map((p) => (
