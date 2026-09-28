@@ -5,8 +5,11 @@ import { SECTION_TITLES, type Backend, type FieldLayout, type FieldSpec, type Pi
 import { clients, resolveBackend } from "./backends";
 import { WIDTHS, applyLayoutThreshold, ruleLayout, ruleSectionTitle, ruleStartsSection, titleCriteria, widthCriteria } from "../shared/layout";
 
+/** A cached pick plus the model that produced it, so a cache-only response can still name the model. */
+type CacheEntry = { pick: Pick; model?: string };
+
 /** Picks are cached per (backend + form purpose + field), so editing one field only re-asks for that field. */
-const cache = new Map<string, Pick>();
+const cache = new Map<string, CacheEntry>();
 const keyFor = (backend: Backend, purpose: string, f: FieldSpec) =>
   createHash("sha1").update(JSON.stringify([backend, purpose, { ...f, id: undefined }])).digest("hex");
 
@@ -96,17 +99,22 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
 
   if (!client) {
     for (const [i, f] of req.fields.entries()) picks[f.id] = rulesPick(f, ruleLayout(req.fields, i));
-    return { mode: "rules", picks, latencyMs: Math.round(performance.now() - started) };
+    return { mode: "rules", asked: 0, cached: 0, picks, latencyMs: Math.round(performance.now() - started) };
   }
 
   // 1. Code filters: only components that can hold this kind of value are candidates.
   // 2. The model decides the component, the width and the section break, one isolated question per field, all in one request.
   const questions: Record<string, Question> = {};
   const pending: number[] = [];
+  /** Models behind the cache hits, so a response made of cached picks still names what answered. */
+  const cachedModels: string[] = [];
+  let cachedHits = 0;
   for (const [i, f] of req.fields.entries()) {
-    const cached = cache.get(keyFor(backend, req.purpose, f));
-    if (cached) {
-      picks[f.id] = applyThreshold(cached, req.fields, i, threshold);
+    const hit = req.noCache ? undefined : cache.get(keyFor(backend, req.purpose, f));
+    if (hit) {
+      cachedHits++;
+      if (hit.model) cachedModels.push(hit.model);
+      picks[f.id] = applyThreshold(hit.pick, req.fields, i, threshold);
       continue;
     }
     pending.push(i);
@@ -184,7 +192,7 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
             : { component: ruleFor(f), source: "only-option" };
         if (s && s.type === "noul") raw.sensitive = s.noul;
         raw.layout = readLayout(res.answers, f.id, f, ruleLayout(req.fields, i), threshold, backend);
-        cache.set(keyFor(backend, req.purpose, f), raw);
+        cache.set(keyFor(backend, req.purpose, f), { pick: raw, model });
         picks[f.id] = applyThreshold(raw, req.fields, i, threshold);
       }
     } catch (e) {
@@ -194,7 +202,16 @@ export async function pickComponents(req: PickRequest): Promise<PickResponse> {
     }
   }
 
-  return { mode: backend, model, usage, error, picks, latencyMs: Math.round(performance.now() - started) };
+  return {
+    mode: backend,
+    model: model ?? cachedModels[0],
+    usage,
+    asked: pending.length,
+    cached: cachedHits,
+    picks,
+    error,
+    latencyMs: Math.round(performance.now() - started),
+  };
 }
 
 /** 3. Confidence gate: act on the model's pick when it is sure, otherwise use the rule-based default — same for the layout. */

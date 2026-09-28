@@ -95,14 +95,24 @@ export type Pick = {
   layout?: FieldLayout;
 };
 
-export type PickRequest = FormSpec & { threshold?: number; backend?: Backend };
+export type PickRequest = FormSpec & {
+  threshold?: number;
+  backend?: Backend;
+  /** Ask the model again instead of serving cached picks (the answers still refresh the cache). */
+  noCache?: boolean;
+};
 
 export type PickResponse = {
   /** Which backend actually answered: the requested one when available, else the best one. */
   mode: Backend;
+  /** The model that answered, also filled in when the picks came from the cache. */
   model?: string;
   latencyMs: number;
   usage?: { input_tokens: number; output_tokens: number };
+  /** Fields whose questions went to the model in this request. */
+  asked: number;
+  /** Fields answered from the pick cache instead. */
+  cached: number;
   picks: Record<string, Pick>; // keyed by field id
   error?: string;
 };

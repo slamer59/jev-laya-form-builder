@@ -29,8 +29,8 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 - **Evaluation** — `bun run eval` runs the three presets through every available backend and prints accuracy, average confidence, latency and per-field mismatches.
 - **Never breaks** — no API key, a failed call or a low-confidence answer all fall back to plain rules. Latency, model name and token usage are shown in the header.
 - **Cheap and stable** — picks are cached per field spec in this app’s API (Laya itself keeps no cache), so editing one field only re-asks about that field; requests are debounced.
-- **Cache indicator** *(coming soon)* — the header says how many picks were asked vs served from cache (“Laya · all cached”, “3 asked, 7 cached · 540 ms”) instead of a bare “0 ms”.
-- **Re-ask** *(coming soon)* — one click asks the model again for the whole form, bypassing the cache.
+- **Cache indicator** — the header says how many picks were asked vs served from cache (“Laya · all cached”, “3 asked, 7 cached · 540 ms”) instead of a bare “0 ms”.
+- **Re-ask** — one click asks the model again for the whole form, bypassing the cache.
 
 ### Export
 

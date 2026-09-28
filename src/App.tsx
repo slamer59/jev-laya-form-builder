@@ -1,5 +1,5 @@
 import * as React from "react";
-import { DownloadIcon, LinkIcon, Loader2Icon, PlusIcon, SparklesIcon } from "lucide-react";
+import { DownloadIcon, LinkIcon, Loader2Icon, PlusIcon, RotateCwIcon, SparklesIcon } from "lucide-react";
 import { candidatesFor } from "@shared/catalog";
 import type { Backend, FieldSpec, Pick, PickResponse } from "@shared/types";
 import type { ImportResult } from "@shared/import";
@@ -50,6 +50,9 @@ export default function App() {
   const [backends, setBackends] = React.useState<Record<Backend, boolean> | null>(null);
   const [backend, setBackend] = React.useState<Backend | null>(null);
   const share = usePersistedForm(React.useMemo(() => ({ purpose, fields, threshold, overrides }), [purpose, fields, threshold, overrides]));
+  /** Bumped by "Re-ask" to run the effect once more; the ref makes that one request bypass the cache. */
+  const [askSeq, setAskSeq] = React.useState(0);
+  const noCacheRef = React.useRef(false);
 
   React.useEffect(() => {
     fetch("/api/status")
@@ -72,8 +75,10 @@ export default function App() {
   );
   React.useEffect(() => {
     const ctrl = new AbortController();
+    const body = { ...request, ...(noCacheRef.current && { noCache: true }) };
+    noCacheRef.current = false; // one-shot: later requests use the cache again
     setLoading(true);
-    fetch("/api/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal: ctrl.signal })
+    fetch("/api/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal })
       .then((r) => r.json())
       .then((data: PickResponse) => {
         setRes(data);
@@ -82,7 +87,7 @@ export default function App() {
       .catch((e) => e.name !== "AbortError" && setServerMode("offline"))
       .finally(() => !ctrl.signal.aborted && setLoading(false));
     return () => ctrl.abort();
-  }, [request]);
+  }, [request, askSeq]);
 
   const picks: Record<string, Pick> = React.useMemo(() => {
     const out: Record<string, Pick> = {};
@@ -151,12 +156,20 @@ export default function App() {
             </Button>
             <ImportDialog onImport={applyImport} />
             {loading && <Loader2Icon className="size-4 animate-spin" />}
-            {res && !loading && (
-              <span className="tabular-nums">
-                {res.model ? `${res.model} · ` : ""}
-                {res.latencyMs} ms
-              </span>
-            )}
+            {res && !loading && <TimingLabel res={res} />}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2"
+              disabled={loading}
+              title="Ask the model again, ignoring the cache"
+              onClick={() => {
+                noCacheRef.current = true;
+                setAskSeq((n) => n + 1);
+              }}
+            >
+              <RotateCwIcon className="size-3.5" /> Re-ask
+            </Button>
             <BackendPicker value={backend} available={backends} onChange={setBackend} />
             <ModeBadge mode={serverMode} />
           </div>
@@ -346,6 +359,20 @@ export default function App() {
         </section>
       </main>
     </div>
+  );
+}
+
+/** Cost of the last pick: who answered, how much was asked vs cached, and the time. */
+function TimingLabel({ res }: { res: PickResponse }) {
+  const name = res.model ? `${res.model} · ` : "";
+  if (res.asked === 0 && res.cached > 0) return <span className="tabular-nums">{name}all {res.cached} cached</span>;
+  const split = res.asked > 0 ? `${res.asked} asked${res.cached > 0 ? `, ${res.cached} cached` : ""} · ` : "";
+  return (
+    <span className="tabular-nums">
+      {name}
+      {split}
+      {res.latencyMs} ms
+    </span>
   );
 }
 
