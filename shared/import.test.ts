@@ -199,6 +199,35 @@ test("Round-trip: every preset survives export → import with the same fields",
   }
 });
 
+test("Round-trip: the new kinds and their settings survive export → import", () => {
+  const fields: FieldSpec[] = [
+    { id: "a", name: "meeting_time", label: "Meeting time", kind: "time", required: true },
+    { id: "b", name: "stay", label: "Stay", kind: "date-range", required: false, description: "Arrival and departure" },
+    { id: "c", name: "budget", label: "Budget", kind: "range", required: true, min: 50, max: 500 },
+    { id: "d", name: "photos", label: "Photos", kind: "file", required: false, accept: "image/*", maxSizeMb: 2, multiple: true },
+    { id: "e", name: "resume", label: "Resume", kind: "file", required: true, accept: ".pdf,.docx", maxSizeMb: 5 },
+    { id: "f", name: "site", label: "Site", kind: "string", required: false, prefix: "https://", suffix: ".dev" },
+  ];
+  const json = formToJson({ purpose: "New kinds", fields, threshold: 0.5, overrides: {} });
+  const r = parseImport(json);
+  assert.equal(r.format, "builder-file");
+  assert.equal(r.ok, true);
+  assert.deepEqual(stripIds(r.fields), stripIds(fields));
+  assert.deepEqual(r.warnings, []);
+  // The document is stable: what came back serialises to the same file.
+  assert.equal(formToJson({ purpose: r.purpose, fields: r.fields, threshold: r.threshold ?? 0, overrides: r.overrides ?? {} }), json);
+  // And it really is plain JSON Schema for the new shapes.
+  const doc = formDocument({ purpose: "New kinds", fields, threshold: 0.5, overrides: {} });
+  const props = (doc.schema.properties as Record<string, Record<string, unknown>>);
+  assert.equal(props.meeting_time.format, "time");
+  assert.equal(props.stay.format, "date-range");
+  assert.deepEqual(Object.keys(props.stay.properties as object), ["from", "to"]);
+  assert.deepEqual(props.budget.items, { type: "number", minimum: 50, maximum: 500 });
+  assert.equal(props.photos.format, "binary");
+  assert.equal(props.photos["x-multiple"], true);
+  assert.equal(props.site["x-prefix"], "https://");
+});
+
 test("Round-trip: a second pass through the reader changes nothing", () => {
   const state: SavedForm = { purpose: "Twice", fields: PRESETS["Account sign-up"].fields, threshold: 0.2, overrides: {} };
   const once = parseImport(formToJson(state));

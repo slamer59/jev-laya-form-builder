@@ -36,7 +36,7 @@ const numOrUndef = (v: string) => (v === "" ? undefined : Number(v));
 export function FieldEditor({ field: f, pick, open, duplicateName, onToggle, onChange, onMove, onRemove, isFirst, isLast }: Props) {
   const kindLabel = KINDS.find((k) => k.value === f.kind)?.label;
   const hasOptions = f.kind === "enum" || f.kind === "multi";
-  const hasRange = f.kind === "number" || f.kind === "string";
+  const hasRange = f.kind === "number" || f.kind === "string" || f.kind === "range";
 
   return (
     <div className={cn("rounded-lg border bg-card", open && "ring-2 ring-ring/30")}>
@@ -90,12 +90,18 @@ export function FieldEditor({ field: f, pick, open, duplicateName, onToggle, onC
                 onValueChange={(v) => {
                   const kind = v as Kind;
                   const needsOptions = kind === "enum" || kind === "multi";
+                  const hasBounds = kind === "number" || kind === "string" || kind === "range";
                   onChange({
                     kind,
                     options: needsOptions ? (f.options?.length ? f.options : ["Option A", "Option B", "Option C"]) : undefined,
                     format: kind === "string" ? f.format : undefined,
-                    min: kind === "number" || kind === "string" ? f.min : undefined,
-                    max: kind === "number" || kind === "string" ? f.max : undefined,
+                    min: hasBounds ? f.min : undefined,
+                    max: hasBounds ? f.max : undefined,
+                    prefix: kind === "string" ? f.prefix : undefined,
+                    suffix: kind === "string" ? f.suffix : undefined,
+                    accept: kind === "file" ? f.accept : undefined,
+                    maxSizeMb: kind === "file" ? f.maxSizeMb : undefined,
+                    multiple: kind === "file" ? f.multiple : undefined,
                   });
                 }}
               >
@@ -129,6 +135,55 @@ export function FieldEditor({ field: f, pick, open, duplicateName, onToggle, onC
               <div />
             )}
           </div>
+
+          {f.kind === "string" && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor={`${f.id}-prefix`}>Prefix</Label>
+                <Input
+                  id={`${f.id}-prefix`}
+                  placeholder="https://"
+                  value={f.prefix ?? ""}
+                  onChange={(e) => onChange({ prefix: e.target.value || undefined })}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor={`${f.id}-suffix`}>Suffix</Label>
+                <Input id={`${f.id}-suffix`} placeholder="kg" value={f.suffix ?? ""} onChange={(e) => onChange({ suffix: e.target.value || undefined })} />
+              </div>
+            </div>
+          )}
+
+          {f.kind === "file" && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-1.5">
+                  <Label htmlFor={`${f.id}-accept`}>Accepted types</Label>
+                  <Input
+                    id={`${f.id}-accept`}
+                    placeholder=".pdf,image/*"
+                    className="font-mono text-xs"
+                    value={f.accept ?? ""}
+                    onChange={(e) => onChange({ accept: e.target.value || undefined })}
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor={`${f.id}-maxsize`}>Max size (MB)</Label>
+                  <Input
+                    id={`${f.id}-maxsize`}
+                    type="number"
+                    min={1}
+                    value={f.maxSizeMb ?? ""}
+                    onChange={(e) => onChange({ maxSizeMb: numOrUndef(e.target.value) })}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch id={`${f.id}-multiple`} checked={!!f.multiple} onCheckedChange={(multiple) => onChange({ multiple })} />
+                <Label htmlFor={`${f.id}-multiple`}>Allow several files</Label>
+              </div>
+            </>
+          )}
 
           {hasOptions && (
             <div className="grid gap-1.5">

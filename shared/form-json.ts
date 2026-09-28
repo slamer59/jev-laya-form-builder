@@ -16,7 +16,23 @@ export type SavedForm = {
 export const DEFAULT_THRESHOLD = 0.5;
 
 /** Canonical key order, so a file exported by the builder round-trips byte for byte. */
-const FIELD_KEYS: (keyof FieldSpec)[] = ["id", "name", "label", "kind", "required", "description", "format", "options", "min", "max"];
+const FIELD_KEYS: (keyof FieldSpec)[] = [
+  "id",
+  "name",
+  "label",
+  "kind",
+  "required",
+  "description",
+  "format",
+  "options",
+  "min",
+  "max",
+  "prefix",
+  "suffix",
+  "accept",
+  "maxSizeMb",
+  "multiple",
+];
 
 export const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : DEFAULT_THRESHOLD);
 

@@ -10,17 +10,17 @@ export const WIDTH_OPTIONS: { value: Width; label: string; when: string }[] = [
   {
     value: "full",
     label: "Full width",
-    when: "The whole row. Long free-form answers (bio, message, cover letter, feedback, address), and multi-select lists read as a group.",
+    when: "The whole row. Long free-form answers (bio, message, cover letter, feedback, address), multi-select lists read as a group, file uploads and date ranges.",
   },
   {
     value: "half",
     label: "Half width",
-    when: "Half the row, pairing with one other short field of the same kind: first and last name, city and postcode, two dropdowns, two toggles.",
+    when: "Half the row, pairing with one other short field of the same kind: first and last name, city and postcode, two dropdowns, two toggles, a clock time and a stepper.",
   },
   {
     value: "third",
     label: "One third",
-    when: "One third of the row, for very short values such as a small number or a short code (age, quantity, minutes, ZIP, verification code).",
+    when: "One third of the row, for very short values such as a small number, a one-to-five rating or a short code (age, quantity, minutes, ZIP, verification code).",
   },
 ];
 
@@ -48,11 +48,20 @@ const SHORT_VALUE = /\b(zip|postal|cvv|cvc|pin|code|age|quantity|qty|count|minut
 
 /** Rule-based column width. Used with no API key, and when Jev is unsure. */
 export function ruleWidth(f: FieldSpec): Width {
+  // A drop zone and a range calendar each need the row to themselves.
+  if (f.kind === "file" || f.kind === "date-range") return "full";
+  if (f.kind === "time") return "half"; // a clock time pairs with one other short field
+  if (f.kind === "range") return "half"; // two thumbs need room to move
   // Long free-form answers need the whole row; multi-selects are read as a group.
   if (f.kind === "string" && ((f.min ?? 0) >= 40 || has(f, LONG_TEXT))) return "full";
   if (f.kind === "multi") return "full";
   if (f.kind === "enum") return (f.options?.length ?? 0) >= 10 ? "full" : "half";
-  if (f.kind === "number") return f.min != null && f.max != null && f.max - f.min <= 100 ? "third" : "half";
+  if (f.kind === "number") {
+    // Whole-number bounds mean a stepper or stars: small enough to sit next to another field.
+    if (f.min != null && f.max != null && f.max - f.min <= 5) return "third";
+    if (f.min != null && f.min >= 0 && f.max != null && f.max - f.min <= 30) return "half";
+    return f.min != null && f.max != null && f.max - f.min <= 100 ? "third" : "half";
+  }
   if (f.kind === "string" && has(f, SHORT_VALUE)) return "third";
   return "half";
 }

@@ -25,13 +25,18 @@ export const EXPECTED: Record<string, Record<string, ExpectedPick>> = {
     cover_letter: { components: ["textarea"], masked: false },
     open_to_remote: { components: ["switch"] }, // a preference, not a consent
     accept_terms: { components: ["checkbox"] }, // consent to tick
+    resume: { components: ["file-button", "file-dropzone"] }, // one document; a button or a drop area both fit
+    portfolio_url: { components: ["input-affix"], masked: false }, // a fixed https:// in front
+    notice_period_days: { components: ["stepper", "number"] }, // small bounded day count
   },
   "Product feedback": {
     satisfaction: { components: ["slider"] }, // 1–10 scale
-    recommend: { components: ["radio"] }, // 3 options
+    recommend: { components: ["toggle-group", "radio"] }, // 3 short options, read best as segmented buttons
     features_used: { components: ["checkbox-group"] }, // 4 options
     feedback: { components: ["textarea"], masked: false },
     contact_me: { components: ["switch"] },
+    overall_rating: { components: ["rating", "slider"] }, // 1–5, so stars (a 1–10 scale stays a slider)
+    usage_period: { components: ["date-range-picker"] }, // a start and an end together
   },
   "Account sign-up": {
     username: { components: ["input"], masked: false },
@@ -41,6 +46,8 @@ export const EXPECTED: Record<string, Record<string, ExpectedPick>> = {
     native_language: { components: ["combobox"] },
     daily_goal_minutes: { components: ["number", "slider"] }, // bounded minutes; both readings hold
     newsletter: { components: ["switch"] },
+    study_time: { components: ["time"] }, // a clock time, nothing else holds one
+    weekly_goal_range: { components: ["range-slider"] }, // a low and a high target together
   },
 };
 

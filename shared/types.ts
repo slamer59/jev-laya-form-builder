@@ -1,5 +1,5 @@
 /** What kind of value a field holds. This decides which components are even allowed. */
-export type Kind = "string" | "number" | "boolean" | "enum" | "multi" | "date";
+export type Kind = "string" | "number" | "boolean" | "enum" | "multi" | "date" | "time" | "date-range" | "range" | "file";
 
 export const KINDS: { value: Kind; label: string }[] = [
   { value: "string", label: "Text" },
@@ -8,6 +8,10 @@ export const KINDS: { value: Kind; label: string }[] = [
   { value: "enum", label: "One of a list" },
   { value: "multi", label: "Several of a list" },
   { value: "date", label: "Date" },
+  { value: "time", label: "Time" },
+  { value: "date-range", label: "Date range" },
+  { value: "range", label: "Number range" },
+  { value: "file", label: "File upload" },
 ];
 
 /** One field in the form. This is the builder's single source of truth. */
@@ -20,8 +24,13 @@ export type FieldSpec = {
   description?: string; // hint shown to the user and sent to Jev
   format?: "email" | "url"; // string only
   options?: string[]; // enum and multi
-  min?: number; // number: value, string: length
+  min?: number; // number/range: value, string: length
   max?: number;
+  prefix?: string; // string only: text inside the input before the value ("https://", "$")
+  suffix?: string; // string only: text after the value ("kg", "min")
+  accept?: string; // file only: comma-separated MIME types or extensions (".pdf,image/*")
+  maxSizeMb?: number; // file only: largest file the user may upload
+  multiple?: boolean; // file only: allow several files
 };
 
 export type FormSpec = {

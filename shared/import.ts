@@ -19,6 +19,14 @@ import type { FieldSpec } from "./types";
  *   field order    → uiSchema["ui:order"]
  *   threshold      → schema["x-threshold"]
  *
+ * The extra field settings ride along as JSON Schema `x-` extensions, which validators ignore:
+ *
+ *   time           → { type: "string", format: "time" }
+ *   date-range     → { type: "object", format: "date-range", properties: { from, to } } (each format: date)
+ *   range          → { type: "array", items: { type: "number", minimum, maximum }, minItems: 2, maxItems: 2 }
+ *   file           → { type: "string", format: "binary", "x-accept", "x-maxSizeMb", "x-multiple" }
+ *   prefix/suffix  → "x-prefix" / "x-suffix" on a string property
+ *
  * Reading is lenient: any JSON Schema object works, and everything the builder
  * cannot express becomes a text field with an entry in `warnings`.
  */
@@ -42,6 +50,11 @@ type Json = Record<string, unknown>;
 
 const SCHEMA_URI = "https://json-schema.org/draft/2020-12/schema";
 const X_THRESHOLD = "x-threshold";
+const X_PREFIX = "x-prefix";
+const X_SUFFIX = "x-suffix";
+const X_ACCEPT = "x-accept";
+const X_MAX_SIZE_MB = "x-maxSizeMb";
+const X_MULTIPLE = "x-multiple";
 const UI_WIDGET = "ui:widget";
 const UI_ORDER = "ui:order";
 
@@ -71,6 +84,8 @@ function propertyFor(f: FieldSpec): Json {
       else if (f.format === "url") p.format = "uri";
       if (f.min != null) p.minLength = f.min;
       if (f.max != null) p.maxLength = f.max;
+      if (f.prefix) p[X_PREFIX] = f.prefix;
+      if (f.suffix) p[X_SUFFIX] = f.suffix;
       break;
     case "number":
       // The builder has no integer kind: whole-number bounds mean whole values.
@@ -93,6 +108,35 @@ function propertyFor(f: FieldSpec): Json {
     case "date":
       p.type = "string";
       p.format = "date";
+      break;
+    case "time":
+      p.type = "string";
+      p.format = "time";
+      break;
+    case "date-range":
+      // Two dates in one property; `format` marks it as a range rather than a nested object.
+      p.type = "object";
+      p.format = "date-range";
+      p.properties = { from: { type: "string", format: "date" }, to: { type: "string", format: "date" } };
+      break;
+    case "range":
+      // Each end is bounded, and the array always holds exactly two numbers.
+      p.type = "array";
+      p.items = {
+        type: "number",
+        ...(f.min != null ? { minimum: f.min } : {}),
+        ...(f.max != null ? { maximum: f.max } : {}),
+      };
+      p.minItems = 2;
+      p.maxItems = 2;
+      break;
+    case "file":
+      // A list of extensions or media types, so it stays an `x-` key rather than contentMediaType.
+      p.type = "string";
+      p.format = "binary";
+      if (f.accept) p[X_ACCEPT] = f.accept;
+      if (f.maxSizeMb != null) p[X_MAX_SIZE_MB] = f.maxSizeMb;
+      if (f.multiple) p[X_MULTIPLE] = true;
       break;
   }
   return p;
@@ -190,12 +234,23 @@ function mapProperty(name: string, s: Json, required: boolean, i: number, warnin
         f.kind = "date";
         if (format === "date-time") warnings.push(`${name}: date-time is treated as a date (the time is dropped).`);
         if (finite(s.minLength) !== undefined || finite(s.maxLength) !== undefined) warnings.push(`${name}: minLength/maxLength are ignored on a date field.`);
+      } else if (format === "time") {
+        f.kind = "time";
+        if (finite(s.minLength) !== undefined || finite(s.maxLength) !== undefined) warnings.push(`${name}: minLength/maxLength are ignored on a time field.`);
+      } else if (format === "binary" || format === "byte") {
+        f.kind = "file";
+        if (typeof s[X_ACCEPT] === "string" && s[X_ACCEPT]) f.accept = s[X_ACCEPT];
+        const maxSizeMb = finite(s[X_MAX_SIZE_MB]);
+        if (maxSizeMb !== undefined) f.maxSizeMb = maxSizeMb;
+        if (s[X_MULTIPLE] === true) f.multiple = true;
       } else {
         if (format === "email") f.format = "email";
         else if (format === "uri" || format === "url") f.format = "url";
         else if (format) warnings.push(`${name}: format "${format}" is not supported — plain text.`);
         f.min = finite(s.minLength);
         f.max = finite(s.maxLength);
+        if (typeof s[X_PREFIX] === "string" && s[X_PREFIX]) f.prefix = s[X_PREFIX];
+        if (typeof s[X_SUFFIX] === "string" && s[X_SUFFIX]) f.suffix = s[X_SUFFIX];
       }
       break;
     }
@@ -228,8 +283,27 @@ function mapProperty(name: string, s: Json, required: boolean, i: number, warnin
         if ((minItems !== undefined || finite(s.maxItems) !== undefined) && !(minItems === 1 && f.required)) {
           warnings.push(`${name}: minItems/maxItems cannot be expressed in the builder — ignored.`);
         }
+      } else if (items.type === "number" || items.type === "integer") {
+        // A pair of numbers is the builder's number range; its bounds live on the items.
+        f.kind = "range";
+        f.min = finite(items.minimum);
+        f.max = finite(items.maximum);
+        if (finite(s.minItems) !== undefined && finite(s.minItems) !== 2) warnings.push(`${name}: only a two-number range is supported — minItems is ignored.`);
+        if (finite(s.maxItems) !== undefined && finite(s.maxItems) !== 2) warnings.push(`${name}: only a two-number range is supported — maxItems is ignored.`);
       } else {
         warnings.push(`${name}: a list without a fixed set of options — used a text field.`);
+      }
+      break;
+    }
+    case "object": {
+      if (s.format === "date-range") {
+        f.kind = "date-range";
+        const props = isObj(s.properties) ? s.properties : {};
+        for (const key of ["from", "to"] as const) {
+          if (!isObj(props[key])) warnings.push(`${name}: the date range has no "${key}" date.`);
+        }
+      } else {
+        warnings.push(`${name}: type "object" is not supported — used a text field.`);
       }
       break;
     }
@@ -240,7 +314,7 @@ function mapProperty(name: string, s: Json, required: boolean, i: number, warnin
       warnings.push(`${name}: type "${String(type)}" is not supported — used a text field.`);
   }
 
-  if (s.$ref || s.oneOf || s.anyOf || s.allOf || s.not || isObj(s.properties)) {
+  if (f.kind !== "date-range" && (s.$ref || s.oneOf || s.anyOf || s.allOf || s.not || isObj(s.properties))) {
     warnings.push(`${name}: nested or composed schemas ($ref/oneOf/anyOf/allOf) are not resolved.`);
   }
   return f;

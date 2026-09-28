@@ -32,6 +32,11 @@ const describe = (f: FieldSpec) => ({
   ...(f.options && { options: f.options }),
   ...(f.min != null && { min: f.min }),
   ...(f.max != null && { max: f.max }),
+  ...(f.prefix && { prefix: f.prefix }),
+  ...(f.suffix && { suffix: f.suffix }),
+  ...(f.accept && { accept: f.accept }),
+  ...(f.maxSizeMb != null && { max_size_mb: f.maxSizeMb }),
+  ...(f.multiple != null && { multiple: f.multiple }),
 });
 
 /** Layout questions point at a field by name and label; the whole form is already in the request state. */

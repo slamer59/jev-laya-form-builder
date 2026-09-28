@@ -20,12 +20,16 @@ export type CodegenInput = {
 /** Catalogue id → the shadcn registry items the generated component imports. */
 export const SHADCN_ITEMS: Record<string, string[]> = {
   input: ["input"],
+  "input-affix": ["input"],
   textarea: ["textarea"],
   otp: ["input-otp"],
   number: ["input"],
+  stepper: ["input"],
+  rating: [],
   slider: ["slider"],
   switch: ["switch"],
   checkbox: ["checkbox"],
+  "toggle-group": ["toggle-group"],
   radio: ["radio-group"],
   select: ["select"],
   combobox: ["popover", "command", "button"],
@@ -33,6 +37,11 @@ export const SHADCN_ITEMS: Record<string, string[]> = {
   chips: ["toggle-group"],
   "date-picker": ["popover", "calendar", "button"],
   "date-input": ["input"],
+  time: ["input"],
+  "date-range-picker": ["popover", "calendar", "button"],
+  "range-slider": ["slider"],
+  "file-dropzone": [],
+  "file-button": [],
 };
 
 /** Every generated form imports these, whatever the picks are. */
@@ -49,6 +58,10 @@ const KIND_DEFAULT: Record<Kind, string> = {
   enum: "select",
   multi: "checkbox-group",
   date: "date-input",
+  time: "time",
+  "date-range": "date-range-picker",
+  range: "range-slider",
+  file: "file-dropzone",
 };
 
 const KNOWN = new Set(Object.keys(SHADCN_ITEMS));
@@ -71,7 +84,7 @@ export function shadcnItems(input: CodegenInput): string[] {
 export function npmDeps(input: CodegenInput): string[] {
   const deps = ["react-hook-form", "@hookform/resolvers", "zod"];
   // A date picker needs the shadcn Calendar, which is built on react-day-picker (installed by `shadcn add calendar`).
-  if (input.fields.some((f) => f.kind === "date")) deps.push("date-fns");
+  if (input.fields.some((f) => f.kind === "date" || f.kind === "date-range")) deps.push("date-fns");
   return deps;
 }
 
@@ -85,8 +98,9 @@ export function installCode(input: CodegenInput): string {
     "# 2. runtime dependencies",
     `npm install ${npmDeps(input).join(" ")}`,
     "",
-    "# combobox is popover + command, chips is toggle-group, date picker is popover + calendar,",
-    "# one-time code is input-otp. `shadcn add calendar` also pulls react-day-picker.",
+    "# combobox is popover + command, chips and the toggle group are toggle-group, both date",
+    "# pickers are popover + calendar, one-time code is input-otp. `shadcn add calendar` also",
+    "# pulls react-day-picker. Stepper, rating and the file fields are plain inputs and buttons.",
   ].join("\n");
 }
 
@@ -118,8 +132,11 @@ type Ctx = {
   component: string;
   sensitive: boolean;
   imports: Imports;
-  helpers: Set<"Combobox" | "DatePicker">;
+  helpers: Set<Helper>;
 };
+
+/** Small components the generated file appends after `<GeneratedForm />`. */
+type Helper = "Combobox" | "DatePicker" | "StarRating" | "DateRangePicker" | "FileField";
 
 /** The control for one field, mirroring the renderer for that component id in src/catalog-render.tsx. */
 function controlOf(ctx: Ctx): string {
@@ -307,6 +324,136 @@ function controlOf(ctx: Ctx): string {
         `</FormControl>`,
       ].join("\n");
     }
+    case "input-affix": {
+      const type = ctx.sensitive ? "password" : spec.format === "email" ? "email" : spec.format === "url" ? "url" : "text";
+      addImport(imports, "@/components/ui/form", "FormControl");
+      addImport(imports, "@/components/ui/input", "Input");
+      return [
+        `<div className="border-input flex items-stretch overflow-hidden rounded-md border bg-transparent shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]">`,
+        ...(spec.prefix ? [`  <span className="bg-muted text-muted-foreground flex items-center border-r px-3 text-sm">${jsxText(spec.prefix)}</span>`] : []),
+        `  <FormControl>`,
+        `    <Input type=${attr(type)} {...field} value={field.value ?? ""} className="rounded-none border-0 shadow-none focus-visible:ring-0 aria-invalid:border-0 aria-invalid:ring-0 dark:bg-transparent" />`,
+        `  </FormControl>`,
+        ...(spec.suffix ? [`  <span className="bg-muted text-muted-foreground flex items-center border-l px-3 text-sm">${jsxText(spec.suffix)}</span>`] : []),
+        `</div>`,
+      ].join("\n");
+    }
+    case "stepper": {
+      const min = spec.min ?? 0;
+      const max = spec.max ?? 100;
+      addImport(imports, "@/components/ui/form", "FormControl");
+      addImport(imports, "@/components/ui/input", "Input");
+      addImport(imports, "lucide-react", "MinusIcon", "PlusIcon");
+      return [
+        `<div className="flex items-center gap-2">`,
+        `  <Button`,
+        `    type="button"`,
+        `    size="icon"`,
+        `    variant="outline"`,
+        `    disabled={field.value != null && field.value <= ${min}}`,
+        `    onClick={() => field.onChange(clampTo((field.value ?? ${min}) - 1, ${min}, ${max}))}`,
+        `    aria-label="Decrease"`,
+        `  >`,
+        `    <MinusIcon />`,
+        `  </Button>`,
+        `  <FormControl>`,
+        `    <Input`,
+        `      type="number"`,
+        `      inputMode="numeric"`,
+        `      min={${min}}`,
+        `      max={${max}}`,
+        `      step={1}`,
+        `      name={field.name}`,
+        `      ref={field.ref}`,
+        `      onBlur={field.onBlur}`,
+        `      value={field.value ?? ""}`,
+        `      onChange={(e) => field.onChange(e.target.value === "" ? undefined : clampTo(e.target.valueAsNumber, ${min}, ${max}))}`,
+        `      className="w-20 text-center tabular-nums"`,
+        `    />`,
+        `  </FormControl>`,
+        `  <Button`,
+        `    type="button"`,
+        `    size="icon"`,
+        `    variant="outline"`,
+        `    disabled={field.value != null && field.value >= ${max}}`,
+        `    onClick={() => field.onChange(clampTo((field.value ?? ${min}) + 1, ${min}, ${max}))}`,
+        `    aria-label="Increase"`,
+        `  >`,
+        `    <PlusIcon />`,
+        `  </Button>`,
+        `</div>`,
+      ].join("\n");
+    }
+    case "rating": {
+      ctx.helpers.add("StarRating");
+      return `<StarRating value={field.value} onChange={field.onChange} onBlur={field.onBlur} max={${Math.min(spec.max ?? 5, 5)}} required={${spec.required}} />`;
+    }
+    case "toggle-group": {
+      addImport(imports, "@/components/ui/form", "FormControl");
+      addImport(imports, "@/components/ui/toggle-group", "ToggleGroup", "ToggleGroupItem");
+      const options = (spec.options ?? []).map((o) => [`  <ToggleGroupItem value=${attr(o)}>`, `    ${jsxText(o)}`, `  </ToggleGroupItem>`].join("\n"));
+      return [
+        `<FormControl>`,
+        `  <ToggleGroup type="single" variant="outline" value={field.value ?? ""} onValueChange={(v) => field.onChange(v || undefined)} onBlur={field.onBlur}>`,
+        options.join("\n"),
+        `  </ToggleGroup>`,
+        `</FormControl>`,
+      ].join("\n");
+    }
+    case "time": {
+      addImport(imports, "@/components/ui/form", "FormControl");
+      addImport(imports, "@/components/ui/input", "Input");
+      return [
+        `<FormControl>`,
+        `  <Input`,
+        `    type="time"`,
+        `    className="w-40"`,
+        `    name={field.name}`,
+        `    ref={field.ref}`,
+        `    onBlur={field.onBlur}`,
+        `    value={field.value ?? ""}`,
+        `    onChange={(e) => field.onChange(e.target.value)}`,
+        `  />`,
+        `</FormControl>`,
+      ].join("\n");
+    }
+    case "date-range-picker": {
+      ctx.helpers.add("DateRangePicker");
+      return `<DateRangePicker value={field.value} onChange={field.onChange} />`;
+    }
+    case "range-slider": {
+      const min = spec.min ?? 0;
+      const max = Math.max(spec.max ?? 100, min + 1);
+      addImport(imports, "@/components/ui/form", "FormControl");
+      addImport(imports, "@/components/ui/slider", "Slider");
+      return [
+        `<div className="w-72 space-y-2">`,
+        `  <FormControl>`,
+        `    <Slider min={${min}} max={${max}} step={1} value={field.value ?? [${min}, ${max}]} onValueChange={([a, b]) => field.onChange([a, b])} onBlur={field.onBlur} />`,
+        `  </FormControl>`,
+        `  <div className="text-muted-foreground flex justify-between text-xs tabular-nums">`,
+        `    <span>{field.value?.[0] ?? ${min}}</span>`,
+        `    <span>{field.value?.[1] ?? ${max}}</span>`,
+        `  </div>`,
+        `</div>`,
+      ].join("\n");
+    }
+    case "file-dropzone":
+    case "file-button": {
+      ctx.helpers.add("FileField");
+      return [
+        `<FileField`,
+        `  value={field.value}`,
+        `  onChange={field.onChange}`,
+        `  onBlur={field.onBlur}`,
+        `  name=${attr(spec.name)}`,
+        ...(spec.accept ? [`  accept=${attr(spec.accept)}`] : []),
+        ...(spec.maxSizeMb != null ? [`  maxSizeMb={${spec.maxSizeMb}}`] : []),
+        ...(spec.multiple ? [`  multiple`] : []),
+        `  dropzone={${ctx.component === "file-dropzone"}}`,
+        `/>`,
+      ].join("\n");
+    }
     default:
       return `<FormControl>\n  <Input {...field} value={field.value ?? ""} />\n</FormControl>`;
   }
@@ -316,9 +463,9 @@ function controlOf(ctx: Ctx): string {
 const INLINE_LABEL = new Set(["switch", "checkbox"]);
 
 /** One <FormField> block, at zero indentation. */
-function fieldBlock(spec: FieldSpec, component: string, sensitive: boolean): { code: string; imports: Imports; helpers: Set<"Combobox" | "DatePicker"> } {
+function fieldBlock(spec: FieldSpec, component: string, sensitive: boolean): { code: string; imports: Imports; helpers: Set<Helper> } {
   const imports: Imports = {};
-  const helpers = new Set<"Combobox" | "DatePicker">();
+  const helpers = new Set<Helper>();
   const control = controlOf({ spec, component, sensitive, imports, helpers });
   addImport(imports, "@/components/ui/form", "FormField", "FormItem", "FormLabel", "FormMessage");
   const description = spec.description ? `<FormDescription>${jsxText(spec.description)}</FormDescription>` : "";
@@ -362,8 +509,9 @@ function fieldBlock(spec: FieldSpec, component: string, sensitive: boolean): { c
 export function generatedFormCode(input: CodegenInput): string {
   const { purpose, fields, picks } = input;
   const imports: Imports = {};
-  const helpers = new Set<"Combobox" | "DatePicker">();
+  const helpers = new Set<Helper>();
   let usesToISO = false;
+  let usesClampTo = false;
 
   // Same sections and column widths as the live preview: from the layout picks, else from the rules.
   const sections = groupSections(
@@ -379,6 +527,7 @@ export function generatedFormCode(input: CodegenInput): string {
         for (const [module, names] of Object.entries(block.imports)) addImport(imports, module, ...names);
         for (const h of block.helpers) helpers.add(h);
         if (component === "date-input") usesToISO = true;
+        if (component === "stepper") usesClampTo = true;
         return [`<div className=${attr(SPAN[widthFor(spec, pick?.layout)])}>`, indent(block.code, 2), `</div>`].join("\n");
       });
       return [
@@ -404,6 +553,25 @@ export function generatedFormCode(input: CodegenInput): string {
     addImport(imports, "@/components/ui/form", "FormControl");
     addImport(imports, "@/components/ui/popover", "Popover", "PopoverContent", "PopoverTrigger");
   }
+  if (helpers.has("StarRating")) {
+    addImport(imports, "lucide-react", "StarIcon");
+    addImport(imports, "@/lib/utils", "cn");
+    addImport(imports, "@/components/ui/form", "FormControl");
+  }
+  if (helpers.has("DateRangePicker")) {
+    addImport(imports, "lucide-react", "CalendarIcon");
+    addImport(imports, "@/lib/utils", "cn");
+    addImport(imports, "react-day-picker", "type DateRange");
+    addImport(imports, "@/components/ui/calendar", "Calendar");
+    addImport(imports, "@/components/ui/form", "FormControl");
+    addImport(imports, "@/components/ui/popover", "Popover", "PopoverContent", "PopoverTrigger");
+  }
+  if (helpers.has("FileField")) {
+    addImport(imports, "lucide-react", "FileIcon", "PaperclipIcon", "UploadIcon", "XIcon");
+    addImport(imports, "@/lib/utils", "cn");
+    addImport(imports, "@/components/ui/button", "Button");
+    addImport(imports, "@/components/ui/form", "FormControl");
+  }
 
   addImport(imports, "react", "*");
   addImport(imports, "react-hook-form", "useForm");
@@ -421,13 +589,18 @@ export function generatedFormCode(input: CodegenInput): string {
       const component = resolveComponent(f, picks[f.id]);
       switch (f.kind) {
         case "string":
+        case "time":
           return `      ${f.name}: "",`;
         case "number":
-          return component === "slider" ? `      ${f.name}: ${f.min ?? 0},` : "";
+          return component === "slider" || component === "stepper" ? `      ${f.name}: ${f.min ?? 0},` : "";
         case "boolean":
           return `      ${f.name}: false,`;
         case "multi":
           return `      ${f.name}: [],`;
+        case "file":
+          return f.multiple ? `      ${f.name}: [],` : "";
+        case "range":
+          return `      ${f.name}: [${f.min ?? 0}, ${f.max ?? 100}],`;
         default:
           return "";
       }
@@ -439,11 +612,14 @@ export function generatedFormCode(input: CodegenInput): string {
   const title = purpose.replace(/[\r\n]+/g, " ").replace(/\*\//g, "* /").trim() || "Untitled form";
 
   const helperCode = [
-    ...(helpers.has("DatePicker")
+    ...(helpers.has("DatePicker") || helpers.has("DateRangePicker")
       ? [`const fmt = (date: Date) => date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });`]
       : []),
     ...(helpers.has("Combobox") ? [comboboxHelper()] : []),
     ...(helpers.has("DatePicker") ? [datePickerHelper()] : []),
+    ...(helpers.has("StarRating") ? [starRatingHelper()] : []),
+    ...(helpers.has("DateRangePicker") ? [dateRangePickerHelper()] : []),
+    ...(helpers.has("FileField") ? [fileFieldHelper()] : []),
   ].join("\n\n");
 
   return (
@@ -465,6 +641,14 @@ export function generatedFormCode(input: CodegenInput): string {
         ? [
             `function toISO(date: Date | undefined) {`,
             `  return date ? [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-") : "";`,
+            `}`,
+            ``,
+          ]
+        : []),
+      ...(usesClampTo
+        ? [
+            `function clampTo(value: number, min: number, max: number) {`,
+            `  return Math.min(Math.max(value, min), max);`,
             `}`,
             ``,
           ]
@@ -616,6 +800,196 @@ function datePickerHelper(): string {
     `        />`,
     `      </PopoverContent>`,
     `    </Popover>`,
+    `  );`,
+    `}`,
+  ].join("\n");
+}
+
+function starRatingHelper(): string {
+  return [
+    `function StarRating({`,
+    `  value,`,
+    `  onChange,`,
+    `  onBlur,`,
+    `  max = 5,`,
+    `  required = false,`,
+    `}: {`,
+    `  value?: number;`,
+    `  onChange: (value: number | undefined) => void;`,
+    `  onBlur?: () => void;`,
+    `  max?: number;`,
+    `  required?: boolean;`,
+    `}) {`,
+    `  const [hover, setHover] = React.useState(0);`,
+    `  const shown = hover || value || 0;`,
+    `  return (`,
+    `    <FormControl>`,
+    `      <div role="radiogroup" className="flex items-center gap-0.5" onMouseLeave={() => setHover(0)} onBlur={onBlur}>`,
+    `        {Array.from({ length: max }, (_, i) => i + 1).map((n) => (`,
+    `          <button`,
+    `            key={n}`,
+    `            type="button"`,
+    `            role="radio"`,
+    `            aria-checked={value === n}`,
+    `            aria-label={\`\${n} star\${n > 1 ? "s" : ""}\`}`,
+    `            className="rounded p-0.5"`,
+    `            onMouseEnter={() => setHover(n)}`,
+    `            onFocus={() => setHover(n)}`,
+    `            onClick={() => onChange(value === n && !required ? undefined : n)}`,
+    `          >`,
+    `            <StarIcon className={cn("size-6 transition-colors", n <= shown ? "fill-amber-400 text-amber-400" : "text-muted-foreground")} />`,
+    `          </button>`,
+    `        ))}`,
+    `        {!!value && (`,
+    `          <span className="text-muted-foreground ml-2 text-sm tabular-nums">`,
+    `            {value}/{max}`,
+    `          </span>`,
+    `        )}`,
+    `      </div>`,
+    `    </FormControl>`,
+    `  );`,
+    `}`,
+  ].join("\n");
+}
+
+function dateRangePickerHelper(): string {
+  return [
+    `function DateRangePicker({`,
+    `  value,`,
+    `  onChange,`,
+    `}: {`,
+    `  value?: DateRange;`,
+    `  onChange: (range: DateRange | undefined) => void;`,
+    `}) {`,
+    `  const [open, setOpen] = React.useState(false);`,
+    `  return (`,
+    `    <Popover open={open} onOpenChange={setOpen}>`,
+    `      <PopoverTrigger asChild>`,
+    `        <FormControl>`,
+    `          <Button variant="outline" className={cn("w-72 justify-start font-normal", !value?.from && "text-muted-foreground")}>`,
+    `            <CalendarIcon />`,
+    `            {value?.from ? (value.to ? \`\${fmt(value.from)} – \${fmt(value.to)}\` : \`\${fmt(value.from)} – …\`) : "Pick a start and end date"}`,
+    `          </Button>`,
+    `        </FormControl>`,
+    `      </PopoverTrigger>`,
+    `      <PopoverContent className="w-auto p-0" align="start">`,
+    `        <Calendar`,
+    `          mode="range"`,
+    `          defaultMonth={value?.from}`,
+    `          selected={value}`,
+    `          onSelect={(range) => {`,
+    `            onChange(range);`,
+    `            if (range?.from && range.to) setOpen(false);`,
+    `          }}`,
+    `        />`,
+    `      </PopoverContent>`,
+    `    </Popover>`,
+    `  );`,
+    `}`,
+  ].join("\n");
+}
+
+function fileFieldHelper(): string {
+  return [
+    `function FileField({`,
+    `  value,`,
+    `  onChange,`,
+    `  onBlur,`,
+    `  name,`,
+    `  accept,`,
+    `  maxSizeMb,`,
+    `  multiple = false,`,
+    `  dropzone = false,`,
+    `}: {`,
+    `  value?: File | File[];`,
+    `  onChange: (value: File | File[] | undefined) => void;`,
+    `  onBlur?: () => void;`,
+    `  name?: string;`,
+    `  accept?: string;`,
+    `  maxSizeMb?: number;`,
+    `  multiple?: boolean;`,
+    `  dropzone?: boolean;`,
+    `}) {`,
+    `  const [over, setOver] = React.useState(false);`,
+    `  const inputRef = React.useRef<HTMLInputElement>(null);`,
+    `  const files: File[] = Array.isArray(value) ? value : value ? [value] : [];`,
+    `  const hint = [accept?.split(",").map((s) => s.trim()).join(", "), maxSizeMb && \`up to \${maxSizeMb} MB\`, multiple && "several allowed"]`,
+    `    .filter(Boolean)`,
+    `    .join(" · ");`,
+    ``,
+    `  return (`,
+    `    <div className="grid gap-2">`,
+    `      <FormControl>`,
+    `        <input`,
+    `          ref={inputRef}`,
+    `          type="file"`,
+    `          name={name}`,
+    `          className="sr-only"`,
+    `          accept={accept}`,
+    `          multiple={multiple}`,
+    `          onBlur={onBlur}`,
+    `          onChange={(e) => {`,
+    `            onChange(multiple ? [...files, ...Array.from(e.target.files ?? [])] : e.target.files?.[0]);`,
+    `            e.target.value = "";`,
+    `          }}`,
+    `        />`,
+    `      </FormControl>`,
+    `      {dropzone ? (`,
+    `        <button`,
+    `          type="button"`,
+    `          onClick={() => inputRef.current?.click()}`,
+    `          onDragOver={(e) => {`,
+    `            e.preventDefault();`,
+    `            setOver(true);`,
+    `          }}`,
+    `          onDragLeave={() => setOver(false)}`,
+    `          onDrop={(e) => {`,
+    `            e.preventDefault();`,
+    `            setOver(false);`,
+    `            onChange(multiple ? [...files, ...Array.from(e.dataTransfer.files)] : e.dataTransfer.files[0]);`,
+    `          }}`,
+    `          className={cn(`,
+    `            "text-muted-foreground grid place-items-center gap-1 rounded-lg border-2 border-dashed p-6 text-center text-sm transition-colors",`,
+    `            over && "border-ring bg-accent",`,
+    `          )}`,
+    `        >`,
+    `          <UploadIcon className="size-6" />`,
+    `          <span className="text-foreground font-medium">{multiple ? "Drag files here, or click to browse" : "Drag a file here, or click to browse"}</span>`,
+    `          {hint && <span className="text-xs">{hint}</span>}`,
+    `        </button>`,
+    `      ) : (`,
+    `        <div className="flex items-center gap-2">`,
+    `          <Button type="button" variant="outline" onClick={() => inputRef.current?.click()}>`,
+    `            <PaperclipIcon />`,
+    `            {files.length ? "Replace file…" : "Choose a file…"}`,
+    `          </Button>`,
+    `          {hint && <span className="text-muted-foreground text-xs">{hint}</span>}`,
+    `        </div>`,
+    `      )}`,
+    `      {files.length > 0 && (`,
+    `        <ul className="grid gap-1">`,
+    `          {files.map((file, i) => (`,
+    `            <li key={\`\${file.name}-\${i}\`} className="bg-muted/50 flex items-center gap-2 rounded-md border px-2 py-1 text-sm">`,
+    `              <FileIcon className="text-muted-foreground size-4 shrink-0" />`,
+    `              <span className="min-w-0 flex-1 truncate">{file.name}</span>`,
+    `              <span className="text-muted-foreground text-xs tabular-nums">`,
+    `                {file.size < 1024 * 1024 ? \`\${Math.max(1, Math.round(file.size / 1024))} KB\` : \`\${(file.size / 1024 / 1024).toFixed(1)} MB\`}`,
+    `              </span>`,
+    `              <Button`,
+    `                type="button"`,
+    `                size="icon"`,
+    `                variant="ghost"`,
+    `                className="size-6"`,
+    `                aria-label={\`Remove \${file.name}\`}`,
+    `                onClick={() => onChange(multiple ? files.filter((_, j) => j !== i) : undefined)}`,
+    `              >`,
+    `                <XIcon />`,
+    `              </Button>`,
+    `            </li>`,
+    `          ))}`,
+    `        </ul>`,
+    `      )}`,
+    `    </div>`,
     `  );`,
     `}`,
   ].join("\n");

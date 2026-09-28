@@ -26,6 +26,9 @@ export const PRESETS: Record<string, FormSpec> = {
       { id: id(), name: "cover_letter", label: "Why do you want to join?", kind: "string", required: true, min: 50, description: "A few paragraphs about your motivation" },
       { id: id(), name: "open_to_remote", label: "Open to remote work", kind: "boolean", required: false },
       { id: id(), name: "accept_terms", label: "I accept the privacy policy", kind: "boolean", required: true },
+      { id: id(), name: "resume", label: "Resume", kind: "file", required: true, accept: ".pdf,.doc,.docx", maxSizeMb: 5, description: "PDF or Word document, up to 5 MB" },
+      { id: id(), name: "portfolio_url", label: "Portfolio or GitHub", kind: "string", required: false, prefix: "https://", description: "Where we can see your work" },
+      { id: id(), name: "notice_period_days", label: "Notice period (days)", kind: "number", required: false, min: 0, max: 30 },
     ],
   },
   "Product feedback": {
@@ -36,6 +39,8 @@ export const PRESETS: Record<string, FormSpec> = {
       { id: id(), name: "features_used", label: "Features you used", kind: "multi", required: false, options: ["Dashboard", "Reports", "Integrations", "API"] },
       { id: id(), name: "feedback", label: "What could we do better?", kind: "string", required: false },
       { id: id(), name: "contact_me", label: "You can contact me about this feedback", kind: "boolean", required: false },
+      { id: id(), name: "overall_rating", label: "Overall rating", kind: "number", required: true, min: 1, max: 5, description: "One to five stars" },
+      { id: id(), name: "usage_period", label: "When did you use it?", kind: "date-range", required: false },
     ],
   },
   "Account sign-up": {
@@ -48,6 +53,8 @@ export const PRESETS: Record<string, FormSpec> = {
       { id: id(), name: "native_language", label: "Native language", kind: "enum", required: true, options: LANGUAGES },
       { id: id(), name: "daily_goal_minutes", label: "Daily goal (minutes)", kind: "number", required: true, min: 5, max: 60 },
       { id: id(), name: "newsletter", label: "Weekly tips by email", kind: "boolean", required: false },
+      { id: id(), name: "study_time", label: "Preferred study time", kind: "time", required: false, description: "When should we remind you?" },
+      { id: id(), name: "weekly_goal_range", label: "Weekly goal range (lessons)", kind: "range", required: true, min: 3, max: 21, description: "Drag to set a low and a high target" },
     ],
   },
 };

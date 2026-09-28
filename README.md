@@ -8,7 +8,7 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 
 ### Build
 
-- **Form builder UI** — add, edit, reorder and remove fields; set label, key, value type, required, hint, email/URL format, options and min/max.
+- **Form builder UI** — add, edit, reorder and remove fields; set label, key, value type, required, hint, email/URL format, options, min/max, a prefix/suffix and file limits.
 - **Presets** — Job application, Product feedback and Account sign-up, to get going in one click.
 - **Live, validated preview** — a real `react-hook-form` + Zod form you can fill in and submit; submitted values are shown as JSON.
 - **Responsive layout** — the preview is a 6-column grid: full-width for long answers, half for short paired fields, a third for tiny ones, collapsing to one column on narrow screens. Section headings come from the layout picks and can be renamed in place (the rename stays client-side).
@@ -39,18 +39,26 @@ The model can be the hosted **[TypeSafe Jev](https://typesafe.ai)** API or **[La
 
 - **Import** — paste a JSON Schema object, a file exported by this builder, or a Zod `z.object({ … })` source snippet (parsed by hand, never evaluated). Type, format, enum, `items.enum`, bounds, required list, title and hint are mapped; `ui:widget` becomes a component override; anything the builder cannot express is listed as a warning before you apply it.
 - **Save and share** — the form (purpose, fields, threshold, overrides) is kept in the URL hash, compressed and URL-safe, so the address bar is already a working link; **Copy link** puts it on the clipboard. localStorage autosaves the same document, and a plain URL with no hash restores it.
-- **Export / import the document** — **Export JSON** downloads `{ "schema": …, "uiSchema": … }`: JSON Schema draft 2020-12 (`description` = purpose, `title` = label, `description` = hint, `enum`, `items.enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `format: date | email | uri`, `required`, `x-threshold`) plus an RJSF-style uiSchema (`ui:order`, `ui:widget`). Importing that file back rebuilds exactly the same fields, and `bun run test:import` checks it for all three presets.
+- **Export / import the document** — **Export JSON** downloads `{ "schema": …, "uiSchema": … }`: JSON Schema draft 2020-12 (`description` = purpose, `title` = label, `description` = hint, `enum`, `items.enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `format: date | time | email | uri | binary`, `required`, `x-threshold`) plus an RJSF-style uiSchema (`ui:order`, `ui:widget`). The newer kinds use their natural JSON Schema shape — a clock time is `format: time`, a date range is an `object` with `from`/`to`, a number range is an array of exactly two numbers bounded on the items, and a file is `format: binary` — with the settings JSON Schema has no word for kept in `x-` extensions (`x-prefix`, `x-suffix`, `x-accept`, `x-maxSizeMb`, `x-multiple`). Importing that file back rebuilds exactly the same fields, and `bun run test:import` checks it for all three presets and for every new kind.
 
 ### Component catalogue
 
-| Value type        | Components                          |
-| ----------------- | ----------------------------------- |
-| Text              | Input · Textarea · Input OTP        |
-| Number            | Number input · Slider               |
-| Yes / No          | Switch · Checkbox                   |
-| One of a list     | Radio group · Select · Combobox     |
-| Several of a list | Checkbox group · Toggle chips       |
-| Date              | Date picker · Date input            |
+| Value type        | Components                                            |
+| ----------------- | ----------------------------------------------------- |
+| Text              | Input · Input with prefix/suffix · Textarea · Input OTP |
+| Number            | Number input · Stepper · Star rating · Slider          |
+| Yes / No          | Switch · Checkbox                                     |
+| One of a list     | Toggle group · Radio group · Select · Combobox         |
+| Several of a list | Checkbox group · Toggle chips                         |
+| Date              | Date picker · Date input                              |
+| Time              | Time input                                            |
+| Date range        | Date range picker (range calendar in a popover)       |
+| Number range      | Range slider (two thumbs, value `[min, max]`)         |
+| File              | Drop zone · File button (`accept`, max size, several files) |
+
+Some components take extra settings on the field: a text field can carry a
+`prefix`/`suffix` shown inside the box (`https://`, `$`, `kg`), and a file field
+carries `accept`, `maxSizeMb` and `multiple`.
 
 ## Quick start
 
@@ -151,9 +159,21 @@ The layout rules — criteria the model reads, rule fallbacks, the confidence ga
 
 1. Add an entry to `CATALOG` in `shared/catalog.ts` (id, accepted value types, `when` description).
 2. Add a renderer for that id in `src/catalog-render.tsx`.
-3. Add a JSX template and a registry mapping for it in `shared/codegen.ts`.
+3. Add a JSX template and a registry mapping for it in `shared/codegen.ts`, and give `ruleFor` a sensible fallback so the form still works without the model.
 
 The model can start choosing it right away. `bun run shadcn:sync` installs any component file the catalogue needs and tells you which ids still have no renderer — the templates themselves stay hand-written.
+
+### Adding a value type
+
+A new `Kind` touches several places: `shared/types.ts` (`Kind`, `KINDS`, the
+`FieldSpec` settings it needs), `shared/catalog.ts` (components that accept it,
+plus the `ruleFor` fallback), `shared/layout.ts` (its rule width, and the width
+criteria the model reads), `shared/schema.ts` (`fieldToZod`, `defaultValueFor`,
+`zodCodeForField`), `shared/import.ts` (its JSON Schema shape) and
+`src/catalog-render.tsx` (the renderer). The field editor in
+`src/components/FieldEditor.tsx` shows any extra settings, `shared/codegen.ts`
+needs a JSX template and a `SHADCN_ITEMS` entry, and `shared/expected.ts` the
+preset expectations the eval scores against.
 
 ## Project layout
 
@@ -196,21 +216,15 @@ src/
 
 ### Eval results
 
-22 component decisions and 7 masked-flag decisions across the three presets. Laya was run locally on CPU with the English checkpoint.
+29 component decisions and 8 masked-flag decisions across the three presets. Laya was run locally on CPU with the English checkpoint.
 
 | Backend | Component accuracy | With 0.5 gate | Masked flag | Avg confidence | Time per preset |
 | ------- | ------------------ | ------------- | ----------- | -------------- | --------------- |
-| Rules   | 22/22 (100%)       | —             | —           | —              | ~3 ms           |
-| Laya    | 8/22 (36%)         | 14/22 (64%)   | 2/7         | 0.51           | ~5–15 s         |
+| Rules   | 29/29 (100%)       | 29/29 (100%)  | 8/8 (100%)  | —              | ~3 ms           |
+| Laya    | 14/29 (48%)        | 23/29 (79%)   | 2/8 (25%)   | 0.46           | ~20 s           |
 | Jev     | not measured yet   |               |             |                |                 |
 
 The rules score is flattering: they were written with these same presets in mind. The gated Laya score is mostly the rules taking over from low-confidence picks. Fine-tuning Laya on form-field decisions would be the way to close the gap.
-
-## Roadmap
-
-In progress on separate branches:
-
-- **More components and value types** — toggle group, stepper, star rating, input with prefix/suffix; new types for time, date range, number range and file upload.
 
 ## Stack
 

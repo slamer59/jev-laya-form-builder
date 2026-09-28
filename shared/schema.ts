@@ -38,6 +38,29 @@ export function fieldToZod(f: FieldSpec): z.ZodType {
       const d = z.date({ error: req });
       return f.required ? d : d.optional();
     }
+    case "time": {
+      const t = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Enter a time like 09:30");
+      return f.required ? t : t.or(z.literal(""));
+    }
+    case "date-range": {
+      const r = z.object({ from: z.date({ error: "Pick a start date" }), to: z.date({ error: "Pick an end date" }) });
+      return f.required ? r : r.optional();
+    }
+    case "range": {
+      const min = f.min ?? 0;
+      const max = f.max ?? 100;
+      const t = z
+        .tuple([z.number({ error: req }), z.number({ error: req })])
+        .refine(([a, b]) => a >= min && b <= max && a <= b, `Must be between ${min} and ${max}`);
+      return f.required ? t : t.optional();
+    }
+    case "file": {
+      const maxBytes = f.maxSizeMb ? f.maxSizeMb * 1024 * 1024 : null;
+      const one = maxBytes ? z.file({ error: req }).max(maxBytes, `Each file must be at most ${f.maxSizeMb} MB`) : z.file({ error: req });
+      if (!f.multiple) return f.required ? one : one.optional();
+      const many = z.array(one);
+      return f.required ? many.min(1, "Add at least one file") : many.optional();
+    }
   }
 }
 
@@ -46,13 +69,18 @@ export const buildSchema = (fields: FieldSpec[]) => z.object(Object.fromEntries(
 export function defaultValueFor(f: FieldSpec, component: string): unknown {
   switch (f.kind) {
     case "string":
+    case "time":
       return "";
     case "number":
-      return component === "slider" ? (f.min ?? 0) : undefined;
+      return component === "slider" || component === "stepper" ? (f.min ?? 0) : undefined;
     case "boolean":
       return false;
     case "multi":
       return [];
+    case "file":
+      return f.multiple ? [] : undefined;
+    case "range":
+      return [f.min ?? 0, f.max ?? 100];
     default:
       return undefined;
   }
@@ -98,11 +126,27 @@ export function zodCodeForField(f: FieldSpec): string {
     }
     case "date":
       return `z.date()${f.required ? "" : ".optional()"}`;
+    case "time":
+      return `z.string().regex(/^([01]\\d|2[0-3]):[0-5]\\d$/)${f.required ? "" : '.or(z.literal(""))'}`;
+    case "date-range":
+      return `z.object({ from: z.date(), to: z.date() })${f.required ? "" : ".optional()"}`;
+    case "range": {
+      const min = f.min ?? 0;
+      const max = f.max ?? 100;
+      return `z.tuple([z.number(), z.number()]).refine(([a, b]) => a >= ${min} && b <= ${max} && a <= b, ${req})${f.required ? "" : ".optional()"}`;
+    }
+    case "file": {
+      const maxBytes = f.maxSizeMb ? f.maxSizeMb * 1024 * 1024 : null;
+      const one = maxBytes ? `z.file({ error: ${req} }).max(${maxBytes})` : `z.file({ error: ${req} })`;
+      if (f.multiple) return `z.array(${one})${f.required ? `.min(1, ${JSON.stringify("Add at least one file")})` : ".optional()"}`;
+      return f.required ? one : `${one}.optional()`;
+    }
   }
 }
 
 /** Field specs → Zod source code, for the Code tab. */
 export function schemaToCode(fields: FieldSpec[]): string {
+
   const body = fields
     .map((f) => {
       const desc = f.description ? `.describe(${JSON.stringify(f.description)})` : "";
