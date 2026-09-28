@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { formDocument, formToJson, parseFormFile, parseImport, parseJsonSchema, parseZod, readFormDocument } from "./import";
 import { candidatesFor } from "./catalog";
+import { buildSchema, zodCodeForField } from "./schema";
 import { normalizeForm, type SavedForm } from "./form-json";
 import { PRESETS } from "../src/presets";
 import { decodeState, encodeState, stateFromHash } from "../src/persist";
@@ -72,6 +73,7 @@ test("JSON Schema: maps type, format, enum, items.enum, bounds and required", ()
 test("JSON Schema: every unsupported bit becomes a text field plus a warning", () => {
   const r = parseJsonSchema(JSON.stringify(JSON_SCHEMA));
   assert.deepEqual(r.warnings, [
+    "Zod cannot compile this schema: Reference not found: #/$defs/url",
     "rating: exclusiveMinimum is treated as the minimum.",
     "last_seen: date-time is treated as a date (the time is dropped).",
     'address: type "object" is not supported — used a text field.',
@@ -113,18 +115,26 @@ test("Builder document: purpose, order, required, bounds, overrides and threshol
     overrides: { f2: "select", f7: "checkbox" },
   };
   const doc = formDocument(state);
-  assert.deepEqual(Object.keys(doc.schema), ["$schema", "type", "properties", "description", "required", "x-threshold"]);
+  assert.deepEqual(Object.keys(doc.schema).sort(), ["$schema", "additionalProperties", "description", "properties", "required", "type", "x-threshold"]);
   assert.equal(doc.schema.description, "Sign up for the beta");
   assert.equal(doc.schema["x-threshold"], 0.65);
   assert.deepEqual(doc.schema.required, ["email", "plan", "topics"]);
   assert.deepEqual(doc.schema.properties, {
-    email: { title: "Email", type: "string", format: "email" },
-    plan: { title: "Plan", type: "string", enum: ["Free", "Pro"] },
-    seats: { title: "Seats", type: "integer", minimum: 1, maximum: 20 },
-    notes: { title: "Notes", description: "Anything else?", type: "string", minLength: 2, maxLength: 200 },
-    topics: { title: "Topics", type: "array", items: { type: "string", enum: ["api", "ui"] }, minItems: 1 },
+    email: { type: "string", format: "email", title: "Email" },
+    plan: { type: "string", enum: ["Free", "Pro"], title: "Plan" },
+    seats: { title: "Seats", type: "number", minimum: 1, maximum: 20 },
+    // Zod writes "may be left empty" as a union with the empty string.
+    notes: {
+      anyOf: [
+        { type: "string", minLength: 2, maxLength: 200 },
+        { type: "string", const: "" },
+      ],
+      title: "Notes",
+      description: "Anything else?",
+    },
+    topics: { minItems: 1, type: "array", items: { type: "string", enum: ["api", "ui"] }, title: "Topics" },
     start: { title: "Start", type: "string", format: "date" },
-    vip: { title: "VIP", type: "boolean" },
+    vip: { type: "boolean", title: "VIP" },
   });
   assert.deepEqual(doc.uiSchema, {
     "ui:order": ["email", "plan", "seats", "notes", "topics", "start", "vip"],
@@ -216,16 +226,48 @@ test("Round-trip: the new kinds and their settings survive export → import", (
   assert.deepEqual(r.warnings, []);
   // The document is stable: what came back serialises to the same file.
   assert.equal(formToJson({ purpose: r.purpose, fields: r.fields, threshold: r.threshold ?? 0, overrides: r.overrides ?? {} }), json);
-  // And it really is plain JSON Schema for the new shapes.
+  // And it really is plain JSON Schema, with the shapes Zod cannot express filled in.
   const doc = formDocument({ purpose: "New kinds", fields, threshold: 0.5, overrides: {} });
-  const props = (doc.schema.properties as Record<string, Record<string, unknown>>);
-  assert.equal(props.meeting_time.format, "time");
-  assert.equal(props.stay.format, "date-range");
-  assert.deepEqual(Object.keys(props.stay.properties as object), ["from", "to"]);
-  assert.deepEqual(props.budget.items, { type: "number", minimum: 50, maximum: 500 });
-  assert.equal(props.photos.format, "binary");
-  assert.equal(props.photos["x-multiple"], true);
-  assert.equal(props.site["x-prefix"], "https://");
+  const props = doc.schema.properties as Record<string, unknown>;
+  assert.deepEqual(props.meeting_time, { title: "Meeting time", type: "string", format: "time" });
+  assert.deepEqual(props.stay, {
+    title: "Stay",
+    description: "Arrival and departure",
+    type: "object",
+    properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" } },
+    required: ["from", "to"],
+    additionalProperties: false,
+  });
+  assert.deepEqual(props.budget, {
+    title: "Budget",
+    type: "array",
+    prefixItems: [{ type: "number", minimum: 50 }, { type: "number", maximum: 500 }],
+    items: false,
+    minItems: 2,
+    maxItems: 2,
+  });
+  assert.deepEqual(props.photos, {
+    title: "Photos",
+    "x-accept": "image/*",
+    "x-maxSizeMb": 2,
+    "x-multiple": true,
+    type: "array",
+    items: { type: "string", format: "binary", contentEncoding: "binary" },
+  });
+  assert.deepEqual(props.resume, {
+    title: "Resume",
+    type: "string",
+    format: "binary",
+    contentEncoding: "binary",
+    "x-accept": ".pdf,.docx",
+    "x-maxSizeMb": 5,
+  });
+  assert.deepEqual(props.site, {
+    title: "Site",
+    anyOf: [{ type: "string" }, { type: "string", const: "" }],
+    "x-prefix": "https://",
+    "x-suffix": ".dev",
+  });
 });
 
 test("Round-trip: a second pass through the reader changes nothing", () => {
@@ -245,6 +287,158 @@ test("Auto-detect picks the right reader", () => {
   assert.equal(parseImport("").ok, false);
   assert.equal(parseImport("{}").ok, false);
   assert.equal(parseImport("{ not json").ok, false);
+});
+
+/* ------------------------------------------------- the shapes Zod cannot write */
+
+test("The written document fixes every shape Zod cannot express", () => {
+  const fields: FieldSpec[] = [
+    { id: "a", name: "start", label: "Start", kind: "date", required: false },
+    { id: "b", name: "stay", label: "Stay", kind: "date-range", required: true },
+    { id: "c", name: "agree", label: "Agree", kind: "boolean", required: true },
+    { id: "d", name: "when", label: "When", kind: "time", required: false },
+    { id: "e", name: "budget", label: "Budget", kind: "range", required: true, min: 50, max: 500 },
+    { id: "f", name: "resume", label: "Resume", kind: "file", required: true, accept: ".pdf", maxSizeMb: 5 },
+    { id: "g", name: "email", label: "Email", kind: "string", required: true, format: "email" },
+    { id: "h", name: "bio", label: "Bio", kind: "string", required: false },
+  ];
+  const state: SavedForm = { purpose: "Shapes", fields, threshold: 0.5, overrides: {} };
+  const props = formDocument(state).schema.properties as Record<string, unknown>;
+  // (a) z.date() has no JSON Schema form at all.
+  assert.deepEqual(props.start, { title: "Start", type: "string", format: "date" });
+  // (b) both ends of a date range are dates.
+  assert.deepEqual(props.stay, {
+    title: "Stay",
+    type: "object",
+    properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" } },
+    required: ["from", "to"],
+    additionalProperties: false,
+  });
+  // (c) "must be ticked" survives, as const: true.
+  assert.deepEqual(props.agree, { title: "Agree", type: "boolean", const: true });
+  // (d) the time regex becomes format: time (the optional branch stays the empty-string union).
+  assert.deepEqual(props.when, { title: "When", anyOf: [{ type: "string", format: "time" }, { type: "string", const: "" }] });
+  // (e) a number range keeps its bounds on each end of the tuple.
+  assert.deepEqual(props.budget, {
+    title: "Budget",
+    type: "array",
+    prefixItems: [{ type: "number", minimum: 50 }, { type: "number", maximum: 500 }],
+    items: false,
+    minItems: 2,
+    maxItems: 2,
+  });
+  // (f) the file's size and accept list are x- keys, not a byte maxLength.
+  assert.deepEqual(props.resume, { title: "Resume", type: "string", format: "binary", contentEncoding: "binary", "x-accept": ".pdf", "x-maxSizeMb": 5 });
+  // (g) the email regex is noise; format: email carries the meaning.
+  assert.deepEqual(props.email, { title: "Email", type: "string", format: "email" });
+  // (h) a text field that may be left empty is a union with the empty string, and comes back optional.
+  assert.deepEqual(props.bio, { title: "Bio", anyOf: [{ type: "string" }, { type: "string", const: "" }] });
+  const back = parseImport(formToJson(state));
+  assert.deepEqual(stripIds(back.fields), stripIds(fields));
+  assert.deepEqual(back.warnings, []);
+});
+
+test("Custom Zod code and hand-written messages are kept verbatim, and never run", () => {
+  const r = parseZod(`z.object({
+  work_email: z.string().email("Work address, please").refine((v) => v.endsWith("@acme.com"), "Company email only"),
+  employee_id: z.string().min(4, "Employee ID, please").max(10),
+  note: z.string().transform((v) => v.trim()).optional(),
+})`);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.fields[0].customZod, '.refine((v) => v.endsWith("@acme.com"), "Company email only")');
+  assert.deepEqual(r.fields[0].errorMessage, { format: "Work address, please" });
+  assert.deepEqual(r.fields[1].errorMessage, { minLength: "Employee ID, please" });
+  // `.max(10)` has no message of its own, so nothing was stored for it.
+  assert.deepEqual(Object.keys(r.fields[1].errorMessage ?? {}), ["minLength"]);
+  assert.equal(r.fields[2].customZod, ".transform((v) => v.trim())");
+
+  // The document carries both as text…
+  const state: SavedForm = { purpose: "Custom", fields: r.fields, threshold: 0.5, overrides: {} };
+  const doc = formDocument(state).schema.properties as Record<string, unknown>;
+  assert.deepEqual(doc.work_email, {
+    type: "string",
+    format: "email",
+    title: "Work email",
+    "x-zod": r.fields[0].customZod,
+    errorMessage: { format: "Work address, please" },
+  });
+  assert.deepEqual(doc.note, { anyOf: [{ type: "string" }, { type: "string", const: "" }], title: "Note", "x-zod": ".transform((v) => v.trim())" });
+
+  // …the reader gives the same fields back…
+  const back = parseImport(formToJson(state));
+  assert.deepEqual(stripIds(back.fields), stripIds(r.fields));
+  assert.deepEqual(back.warnings, []);
+
+  // …and the generated code re-emits it verbatim, after the constraints and before "may be empty".
+  const emailCode = zodCodeForField(r.fields[0]);
+  assert.ok(emailCode.startsWith('z.email("Work address, please")'), emailCode);
+  assert.ok(emailCode.includes('.refine((v) => v.endsWith("@acme.com"), "Company email only")'), emailCode);
+  assert.equal(
+    zodCodeForField({ id: "x", name: "n", label: "N", kind: "string", required: false, customZod: ".refine((v) => v.length > 2)" }),
+    'z.string().refine((v) => v.length > 2).or(z.literal(""))',
+  );
+
+  // The preview never runs it: a value that breaks the custom rule still parses.
+  const schema = buildSchema([
+    { id: "x", name: "work_email", label: "Work email", kind: "string", required: true, format: "email", customZod: '.refine((v) => v.endsWith("@acme.com"), "Company email only")' },
+  ]);
+  assert.equal(schema.safeParse({ work_email: "someone@gmail.com" }).success, true);
+});
+
+test("Documents written before the Zod writer still load", () => {
+  const legacy = {
+    schema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      description: "Legacy form",
+      "x-threshold": 0.3,
+      required: ["full_name", "email", "skills"],
+      properties: {
+        full_name: { title: "Full name", type: "string" },
+        email: { title: "Email", type: "string", format: "email" },
+        years: { title: "Years", type: "integer", minimum: 0, maximum: 50 },
+        role: { title: "Role", type: "string", enum: ["A", "B"] },
+        skills: { title: "Skills", type: "array", items: { type: "string", enum: ["x", "y"] }, minItems: 1 },
+        when: { title: "When", type: "string", format: "time" },
+        stay: { title: "Stay", type: "object", format: "date-range", properties: { from: { type: "string", format: "date" }, to: { type: "string", format: "date" } } },
+        budget: { title: "Budget", type: "array", items: { type: "number", minimum: 50, maximum: 500 }, minItems: 2, maxItems: 2 },
+        resume: { title: "Resume", type: "string", format: "binary", "x-accept": ".pdf", "x-maxSizeMb": 5 },
+        photos: { title: "Photos", type: "string", format: "binary", "x-accept": "image/*", "x-multiple": true },
+        site: { title: "Site", type: "string", "x-prefix": "https://", "x-suffix": ".dev" },
+      },
+    },
+    uiSchema: { "ui:order": ["full_name", "email", "years", "role", "skills", "when", "stay", "budget", "resume", "photos", "site"], email: { "ui:widget": "textarea" } },
+  };
+  const r = parseImport(JSON.stringify(legacy));
+  assert.equal(r.format, "builder-file");
+  assert.equal(r.ok, true);
+  assert.equal(r.threshold, 0.3);
+  assert.deepEqual(
+    r.fields.map((f) => [f.name, f.kind, f.required]),
+    [
+      ["full_name", "string", true],
+      ["email", "string", true],
+      ["years", "number", false],
+      ["role", "enum", false],
+      ["skills", "multi", true],
+      ["when", "time", false],
+      ["stay", "date-range", false],
+      ["budget", "range", false],
+      ["resume", "file", false],
+      ["photos", "file", false],
+      ["site", "string", false],
+    ],
+  );
+  const byName = Object.fromEntries(r.fields.map((f) => [f.name, f]));
+  assert.deepEqual([byName.years.min, byName.years.max], [0, 50]);
+  assert.deepEqual(byName.role.options, ["A", "B"]);
+  assert.deepEqual([byName.budget.min, byName.budget.max], [50, 500]);
+  assert.deepEqual([byName.resume.accept, byName.resume.maxSizeMb], [".pdf", 5]);
+  assert.deepEqual([byName.photos.accept, byName.photos.multiple], ["image/*", true]);
+  assert.deepEqual([byName.site.prefix, byName.site.suffix], ["https://", ".dev"]);
+  assert.equal(byName.email.format, "email");
+  assert.deepEqual(r.warnings, []);
 });
 
 /* ---------------------------------------------------------------------- Zod */
@@ -286,7 +480,8 @@ test("Zod: parses the common subset without evaluating anything", () => {
     { id: "imp_8", name: "skills", label: "Skills", kind: "multi", required: true, options: ["React", "Go"] },
     { id: "imp_9", name: "start_date", label: "Start date", kind: "date", required: true },
     { id: "imp_10", name: "bio", label: "Bio", kind: "string", required: false },
-    { id: "imp_11", name: "age", label: "Age", kind: "number", required: false },
+    // `.int()` has no data form, so it is kept verbatim as custom code.
+    { id: "imp_11", name: "age", label: "Age", kind: "number", required: false, customZod: ".int()" },
     { id: "imp_12", name: "opt_in", label: "Opt in", kind: "string", required: true },
   ]);
   assert.deepEqual(r.warnings, ['opt_in: unsupported Zod type "z.union([z.string(), z.null()])" — used a text field.']);

@@ -10,7 +10,7 @@
     "eval": "tsx scripts/eval.ts",
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc -p .",
-    "test:import": "tsx shared/import.test.ts",
+    "test:import": "tsx shared/import.test.ts && tsx shared/roundtrip.test.ts",
     "test:pick": "tsx server/pick.test.ts",
     "verify:codegen": "tsx scripts/verify-codegen.ts",
     "shadcn:sync": "tsx scripts/shadcn-sync.ts"
@@ -42,6 +42,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
+    "fast-check": "^4.10.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

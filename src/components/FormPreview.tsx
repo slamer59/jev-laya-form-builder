@@ -27,6 +27,21 @@ type Props = {
 /** Column span of each width on the 6-column grid. Below `lg` every field takes the one column. */
 const SPAN: Record<Width, string> = { full: "lg:col-span-6", half: "lg:col-span-3", third: "lg:col-span-2" };
 
+/**
+ * A field can carry custom Zod code (`x-zod`) that has no data form. The preview
+ * cannot run it — it is text — so the field says where it does run.
+ */
+function CustomRuleHint({ code }: { code: string }) {
+  return (
+    <span
+      className="ml-2 rounded border border-dashed px-1 py-0.5 align-middle text-[10px] font-normal text-muted-foreground"
+      title={code}
+    >
+      custom rule · runs in exported code
+    </span>
+  );
+}
+
 export function FormPreview({ purpose, fields, picks, showDecisions, sectionTitles, onOverride, onRenameSection }: Props) {
   const schema = React.useMemo(() => buildSchema(fields), [fields]);
   const form = useForm<FieldValues>({
@@ -102,6 +117,7 @@ export function FormPreview({ purpose, fields, picks, showDecisions, sectionTitl
                                 <FormLabel className="leading-snug">
                                   {spec.label}
                                   {spec.required && <span className="text-destructive">*</span>}
+                                  {spec.customZod && <CustomRuleHint code={spec.customZod} />}
                                 </FormLabel>
                                 {spec.description && <FormDescription>{spec.description}</FormDescription>}
                                 <FormMessage />
@@ -112,6 +128,7 @@ export function FormPreview({ purpose, fields, picks, showDecisions, sectionTitl
                               <FormLabel>
                                 {spec.label}
                                 {spec.required && <span className="text-destructive">*</span>}
+                                {spec.customZod && <CustomRuleHint code={spec.customZod} />}
                               </FormLabel>
                               {control}
                               {spec.description && <FormDescription>{spec.description}</FormDescription>}

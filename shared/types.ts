@@ -31,6 +31,10 @@ export type FieldSpec = {
   accept?: string; // file only: comma-separated MIME types or extensions (".pdf,image/*")
   maxSizeMb?: number; // file only: largest file the user may upload
   multiple?: boolean; // file only: allow several files
+  /** Custom Zod code kept verbatim as text (JSON Schema `x-zod`); never run here, only in exported code. */
+  customZod?: string;
+  /** Validation messages that cannot be regenerated from the label and settings, keyed by JSON Schema keyword. */
+  errorMessage?: Record<string, string>;
 };
 
 export type FormSpec = {

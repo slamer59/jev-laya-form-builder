@@ -59,6 +59,44 @@ const targets: [string, CodegenInput][] = [
       picks: Object.fromEntries(allComponents.map((f, i) => [f.id, { component: CATALOG[i].id, source: "override" as const }])),
     },
   ],
+  [
+    "CustomRule",
+    {
+      purpose: "Keep custom rule text intact (generated for verification)",
+      // Not a preset: the custom Zod text below must survive into the generated file
+      // verbatim (quotes, newlines and all) and still compile.
+      fields: [
+        {
+          id: "cr1",
+          name: "work_email",
+          label: "Work email",
+          kind: "string",
+          required: true,
+          format: "email",
+          customZod: `.refine((v) => v.endsWith("@acme.com"), "Company email only")\n  .transform((v) => v.toLowerCase())`,
+        },
+        {
+          id: "cr2",
+          name: "employee_id",
+          label: "Employee ID",
+          kind: "string",
+          required: true,
+          min: 4,
+          max: 10,
+          errorMessage: { minLength: "Employee ID, please", maxLength: "Ten characters at most" },
+        },
+        {
+          id: "cr3",
+          name: "start_date",
+          label: "Start date",
+          kind: "date",
+          required: false,
+          customZod: `.refine((d) => d.getFullYear() > 2020, "🗓 Too old — pick a recent date\\n(see the policy)")`,
+        },
+      ] as FieldSpec[],
+      picks: { cr1: { component: "input", source: "override" }, cr2: { component: "input", source: "override" }, cr3: { component: "date-picker", source: "override" } },
+    },
+  ],
 ];
 
 mkdirSync(outDir, { recursive: true });
